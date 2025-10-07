@@ -1,6 +1,7 @@
-INFO:     Started server process [17968]
+Installed 68 packages in 341ms
+INFO:     Started server process [27448]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8017 (Press CTRL+C to quit)
-INFO:     127.0.0.1:53863 - "GET /sse HTTP/1.1" 200 OK
-INFO:     127.0.0.1:53864 - "GET /sse HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64687 - "GET /sse HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64688 - "GET /sse HTTP/1.1" 200 OK

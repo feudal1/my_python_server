@@ -1,78 +1,374 @@
 {
-  "groups": [
+  "thickness_groups": [
     {
-      "thickness": "14mm",
-      "parts": [
+      "thickness": "10mm",
+      "area_required": 0.896,
+      "components": [
         {
-          "name": "K-1",
-          "thickness": "14mm"
+          "part_name": "PL10*50*80",
+          "quantity": 112,
+          "number": "12-8",
+          "component": "钢板",
+          "thickness": "10mm"
+        },
+        {
+          "part_name": "PL10*50*360",
+          "quantity": 112,
+          "number": "12-9",
+          "component": "钢板",
+          "thickness": "10mm"
         }
       ]
     },
     {
-      "thickness": "6mm",
-      "parts": [
+      "thickness": "20mm",
+      "area_required": 199.89,
+      "components": [
         {
-          "name": "K-2",
-          "thickness": "6mm"
+          "part_name": "PL20*570*4810",
+          "quantity": 12,
+          "number": "7-4",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-3",
-          "thickness": "6mm"
+          "part_name": "PL20*150*1920",
+          "quantity": 18,
+          "number": "7-5",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-4",
-          "thickness": "6mm"
+          "part_name": "PL20*150*150",
+          "quantity": 18,
+          "number": "7-6",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-5",
-          "thickness": "6mm"
+          "part_name": "PL20*570*4810",
+          "quantity": 10,
+          "number": "8-4",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-6",
-          "thickness": "6mm"
+          "part_name": "PL20*150*2270",
+          "quantity": 15,
+          "number": "8-5",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-7",
-          "thickness": "6mm"
+          "part_name": "PL20*150*150",
+          "quantity": 15,
+          "number": "8-6",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-8",
-          "thickness": "6mm"
+          "part_name": "PL20*110*300",
+          "quantity": 32,
+          "number": "9-2",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-9",
-          "thickness": "6mm"
+          "part_name": "PL20*300*350",
+          "quantity": 32,
+          "number": "9-3",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-10",
-          "thickness": "6mm"
+          "part_name": "PL20*135*229",
+          "quantity": 128,
+          "number": "9-4",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "K-11",
-          "thickness": "6mm"
+          "part_name": "PL20*135*62",
+          "quantity": 128,
+          "number": "9-5",
+          "component": "钢板",
+          "thickness": "20mm"
         },
         {
-          "name": "S-1",
-          "thickness": "6mm"
+          "part_name": "PL20*220*300",
+          "quantity": 16,
+          "number": "9-6",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*300*700",
+          "quantity": 64,
+          "number": "9-7",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*330*3400",
+          "quantity": 16,
+          "number": "9-8",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*150*150",
+          "quantity": 16,
+          "number": "9-9",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*150*720",
+          "quantity": 16,
+          "number": "9-10",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*135*350",
+          "quantity": 32,
+          "number": "9-13",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*805*1810",
+          "quantity": 28,
+          "number": "10-4",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*150*1790",
+          "quantity": 14,
+          "number": "10-5",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*150*150",
+          "quantity": 14,
+          "number": "10-6",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*250*360",
+          "quantity": 12,
+          "number": "11-13",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*250*2732",
+          "quantity": 32,
+          "number": "11-14",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*250*3097",
+          "quantity": 8,
+          "number": "11-16",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*500*2415",
+          "quantity": 10,
+          "number": "11-18",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*250*7470",
+          "quantity": 16,
+          "number": "11-21",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*100*150",
+          "quantity": 132,
+          "number": "12-4",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*110*400",
+          "quantity": 56,
+          "number": "12-10",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*312*169",
+          "quantity": 64,
+          "number": "12-12",
+          "component": "钢板",
+          "thickness": "20mm"
+        },
+        {
+          "part_name": "PL20*270*140",
+          "quantity": 96,
+          "number": "12-13",
+          "component": "钢板",
+          "thickness": "20mm"
         }
       ]
     },
     {
-      "thickness": "4mm",
-      "parts": [
+      "thickness": "25mm",
+      "area_required": 37.45,
+      "components": [
         {
-          "name": "K-12",
-          "thickness": "4mm"
+          "part_name": "PL25*120*250",
+          "quantity": 20,
+          "number": "11-2",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*250*566",
+          "quantity": 8,
+          "number": "11-3",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*250*800",
+          "quantity": 32,
+          "number": "11-4",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*110*123",
+          "quantity": 64,
+          "number": "11-5",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*110*267",
+          "quantity": 64,
+          "number": "11-6",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*110*400",
+          "quantity": 40,
+          "number": "11-7",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*740*2695",
+          "quantity": 8,
+          "number": "11-19",
+          "component": "钢板",
+          "thickness": "25mm"
+        },
+        {
+          "part_name": "PL25*560*2695",
+          "quantity": 12,
+          "number": "11-20",
+          "component": "钢板",
+          "thickness": "25mm"
         }
       ]
     },
     {
-      "thickness": "6mm(BLL)",
-      "parts": [
+      "thickness": "30mm",
+      "area_required": 13.44,
+      "components": [
         {
-          "name": "L-1",
-          "thickness": "6mm"
+          "part_name": "PL30*350*676.2",
+          "quantity": 32,
+          "number": "9-11",
+          "component": "钢板",
+          "thickness": "30mm"
+        },
+        {
+          "part_name": "PL30*350*1432.4",
+          "quantity": 16,
+          "number": "9-12",
+          "component": "钢板",
+          "thickness": "30mm"
+        },
+        {
+          "part_name": "PL30*400*1505.6",
+          "quantity": 12,
+          "number": "11-8",
+          "component": "钢板",
+          "thickness": "30mm"
+        },
+        {
+          "part_name": "PL30*400*1212.8",
+          "quantity": 8,
+          "number": "11-9",
+          "component": "钢板",
+          "thickness": "30mm"
+        },
+        {
+          "part_name": "PL30*360*117",
+          "quantity": 32,
+          "number": "11-26",
+          "component": "钢板",
+          "thickness": "30mm"
+        },
+        {
+          "part_name": "PL30*180*330",
+          "quantity": 12,
+          "number": "12-5",
+          "component": "钢板",
+          "thickness": "30mm"
+        },
+        {
+          "part_name": "PL30*320*330",
+          "quantity": 36,
+          "number": "12-16",
+          "component": "钢板",
+          "thickness": "30mm"
+        }
+      ]
+    },
+    {
+      "thickness": "40mm",
+      "area_required": 2.04,
+      "components": [
+        {
+          "part_name": "PL40*100*140",
+          "quantity": 24,
+          "number": "12-3",
+          "component": "钢板",
+          "thickness": "40mm"
+        },
+        {
+          "part_name": "PL40*100*300",
+          "quantity": 72,
+          "number": "12-15",
+          "component": "钢板",
+          "thickness": "40mm"
+        }
+      ]
+    },
+    {
+      "thickness": "50mm",
+      "area_required": 3.86,
+      "components": [
+        {
+          "part_name": "PL50*80*2415",
+          "quantity": 20,
+          "number": "11-17",
+          "component": "钢板",
+          "thickness": "50mm"
         }
       ]
     }

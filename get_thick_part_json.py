@@ -63,15 +63,30 @@ def process_excel_api():
         # 提取板厚和构件信息
         extracted_info = excel_data
         
-        # 构造发送给AI的消息，要求AI用标记框起JSON
-        ai_message_content = f"""请从以下Excel数据中提取板厚和构件信息，并按照指定格式返回JSON，使用[START_JSON]和[END_JSON]标记框起JSON部分。特别注意：请将零件按照厚度进行分组。
+        # 在获取excel_memory之前，先从环境变量或配置中获取该信息
+        excel_memory = os.environ.get('excel_memory', '')
+
+        ai_message_content = f"""请从以下Excel数据中提取板厚,编号,数量和构件信息，以及需要平方米的板,并按照指定格式返回JSON，使用[START_JSON]和[END_JSON]标记框起JSON部分。特别注意：请将零件按照厚度进行分组。
+
+        关于材料的一些记忆信息：{excel_memory}
 
         示例格式：
         [START_JSON]
         {{
-        "groups": [
-            {{"thickness": "10mm", "parts": [{{"name": "零件A", "thickness": "10mm"}}]}},
-            {{"thickness": "20mm", "parts": [{{"name": "零件B", "thickness": "20mm"}}]}}
+        "thickness_groups": [
+            {{
+            "thickness": "10mm",
+            "area_required": 2.5,
+            "components": [
+                {{
+                "part_name": "PL20*570*4810",
+                "quantity": 5,
+                "number": "10-2",
+                "component": "角钢"
+                 "thickness": "10mm",
+                }}
+            ]
+            }}
         ]
         }}
         [END_JSON]
@@ -130,6 +145,8 @@ def process_excel_api():
         # 返回处理后的数据
         return jsonify({
             "status": "success",
+
+            # "excel_data": excel_data,
             "structured_data": structured_data  # 已解析的结构化数据
         })
         
