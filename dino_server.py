@@ -92,7 +92,62 @@ def process_image():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+# 在您的 dino_server.py 中添加以下内容:
 
+@app.route('/calculate_similarity', methods=['GET'])
+def calculate_similarity():
+    """
+    计算两张图像的DINO特征相似度
+    
+    Query Parameters:
+        image1_path: 第一张图像的路径
+        image2_path: 第二张图像的路径
+    
+    Returns:
+        JSON格式的相似度值
+    """
+    try:
+        # 从请求参数获取图像路径
+        image1_path = request.args.get('image1_path')
+        image2_path = request.args.get('image2_path')
+        
+        if not image1_path or not image2_path:
+            return jsonify({"error": "Missing image paths"}), 400
+       
+        
+        # 加载两张图片
+        image1 = load_image_from_path(image1_path)
+        image2 = load_image_from_path(image2_path)
+        
+        # 使用processor处理图像
+        inputs1 = processor(images=image1, return_tensors="pt")
+        inputs2 = processor(images=image2, return_tensors="pt")
+        
+        # 将输入数据移动到GPU
+        inputs1['pixel_values'] = inputs1['pixel_values'].to('cuda')
+        inputs2['pixel_values'] = inputs2['pixel_values'].to('cuda')
+        
+        # 使用模型进行推理
+        with torch.no_grad():
+            outputs1 = model(inputs1['pixel_values'])
+            outputs2 = model(inputs2['pixel_values'])
+            
+            # 获取特征向量（这里使用平均池化）
+            features1 = outputs1.last_hidden_state.mean(dim=1)  # [batch_size, hidden_size]
+            features2 = outputs2.last_hidden_state.mean(dim=1)  # [batch_size, hidden_size]
+            
+            # 计算余弦相似度
+            cos_sim = torch.nn.functional.cosine_similarity(features1, features2)
+            similarity = cos_sim.item()
+        
+        return jsonify({
+            "similarity": similarity,
+            "image1_path": image1_path,
+            "image2_path": image2_path
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 @app.route('/image_info', methods=['GET'])
 def image_info():
     # 从请求参数中获取图片路径

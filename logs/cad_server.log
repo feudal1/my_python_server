@@ -8,95 +8,66 @@ Press CTRL+C to quit
  * Restarting with stat
  * Debugger is active!
  * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:24:53] "GET /screenshot HTTP/1.1" 500 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:27:36] "GET /screenshot HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:29:12] "GET /screenshot/view HTTP/1.1" 200 -
-127.0.0.1 - - [07/Oct/2025 16:29:12] "GET /favicon.ico HTTP/1.1" 404 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:32:37] "GET /screenshot/view HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:38:29] "GET /screenshot/view HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:41:47] "GET /screenshot/view HTTP/1.1" 404 -
-127.0.0.1 - - [07/Oct/2025 16:42:05] "GET /screenshot/region HTTP/1.1" 500 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:44:28] "GET /screenshot/region HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:45:40] "GET /screenshot/region HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:45:55] "GET /screenshot/region HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:46:11] "GET /screenshot/region HTTP/1.1" 200 -
-127.0.0.1 - - [07/Oct/2025 16:46:32] "GET /screenshot/region HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:46:40] "GET /screenshot/region HTTP/1.1" 200 -
- * Detected change in 'E:\\code\\my_python_server\\cad_server\\server.py', reloading
- * Restarting with stat
- * Debugger is active!
- * Debugger PIN: 127-181-769
-127.0.0.1 - - [07/Oct/2025 16:46:48] "GET /screenshot/region HTTP/1.1" 200 -
-127.0.0.1 - - [07/Oct/2025 16:48:56] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:29:00] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:29:09] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:27] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:28] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:29] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:30] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:31] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:32] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:33] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:34] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:35] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:36] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:37] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:39] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:40] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:41] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:42] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:43] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:46] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:47] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:48] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:49] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:50] "POST /command/echo HTTP/1.1" 200 -
+获取模型空间边界框出错: Name Extents not found
+127.0.0.1 - - [07/Oct/2025 18:32:51] "GET /model/bounds HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:52] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:53] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:54] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:55] "GET /delete-area?min_x=104.86937&min_y=178.11365&max_x=441.5642&max_y=351.93753 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:56] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:32:57] "GET /screenshot/region/base64 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:33:00] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:33:01] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:33:02] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:33:03] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:33:04] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:46] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:47] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:48] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:50] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:51] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:52] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:53] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:54] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:55] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:56] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:57] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:58] "GET /edit/undo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:34:59] "GET /screenshot/region HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:00] "POST /command/echo HTTP/1.1" 200 -
+获取模型空间边界框出错: Name Extents not found
+127.0.0.1 - - [07/Oct/2025 18:35:02] "GET /model/bounds HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:03] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:04] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:05] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:06] "GET /delete-area?min_x=293.97055&min_y=196.29857&max_x=822.52106&max_y=375.0889 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:07] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:08] "GET /screenshot/region/base64 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:11] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:12] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:13] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:14] "POST /command/echo HTTP/1.1" 200 -
+127.0.0.1 - - [07/Oct/2025 18:35:15] "GET /screenshot/region HTTP/1.1" 200 -

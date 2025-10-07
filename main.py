@@ -83,7 +83,7 @@ def start_servers():
             "log_file": "logs/dino_server.log"
         }
     ]
-    start_servers=cad_servers 
+    start_servers=excel_servers 
     processes = []
     
     print("正在启动所有服务器...")

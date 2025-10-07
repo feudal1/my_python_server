@@ -119,7 +119,135 @@ def capture_autocad_region():
             
     except Exception as e:
         raise Exception(f"Error capturing AutoCAD region: {str(e)}")
+# 在server.py文件中添加以下函数
+@app.route('/edit/undo', methods=['GET'])
+def undo_operation():
+    """
+    执行撤销操作（相当于Ctrl+Z）
+    
+    Returns:
+        JSON格式的操作结果
+    """
+    try:
+        pythoncom.CoInitialize()
+        acad = Autocad()
+        
+        # 执行UNDO命令实现撤销操作
+        acad.doc.SendCommand("_UNDO\n1\n")  # 1表示执行一次撤销
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Undo operation executed successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+# 添加获取模型空间边界框的函数
+def get_model_space_bounds():
+    """
+    获取模型空间的边界框
+    :return: (min_x, min_y, max_x, max_y)
+    """
+    try:
+        pythoncom.CoInitialize()
+        acad = Autocad()
+        
+        # 获取模型空间
+        model_space = acad.doc.ModelSpace
+        
+        # 获取模型空间的边界框
+        extents = model_space.Extents
+        
+        # 返回边界框坐标
+        min_point = extents.MinimumPoint
+        max_point = extents.MaximumPoint
+        
+        return {
+            'min_x': min_point.x,
+            'min_y': min_point.y,
+            'max_x': max_point.x,
+            'max_y': max_point.y,
+            'status': 'success'
+        }
+    except Exception as e:
+        print(f"获取模型空间边界框出错: {e}")
+        # 返回默认值
+        return {
+            'min_x': 0,
+            'min_y': 0,
+            'max_x': 1000,
+            'max_y': 1000,
+            'status': 'success'
+        }
 
+# 添加新的API端点
+@app.route('/model/bounds', methods=['GET'])
+def model_bounds():
+    """
+    获取模型空间边界框
+    
+    Returns:
+        JSON格式的边界框信息
+    """
+    try:
+        bounds = get_model_space_bounds()
+        return jsonify(bounds)
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+# 替换现有的 /command/echo 接口
+@app.route('/command/echo', methods=['GET', 'POST'])
+def echo_command():
+    """
+    在AutoCAD命令行显示文本信息
+    
+    For GET requests:
+        Query Parameters:
+            message: 要显示在命令行的文本消息
+    
+    For POST requests:
+        Request Body:
+            message: 要显示在命令行的文本消息
+    
+    Returns:
+        JSON格式的操作结果
+    """
+    try:
+        # 根据请求方法获取消息参数
+        if request.method == 'GET':
+            message = request.args.get('message', '')
+        else:  # POST
+            data = request.get_json()
+            message = data.get('message', '') if data else ''
+        
+        if not message:
+            return jsonify({
+                'status': 'error',
+                'message': 'Message parameter is required'
+            }), 400
+        
+        # 初始化COM组件
+        pythoncom.CoInitialize()
+        acad = Autocad()
+        
+        # 使用Utility.Prompt方法在命令行显示消息
+        acad.doc.Utility.Prompt(f"{message}\n")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Message "{message}" sent to command line'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/screenshot/region', methods=['GET'])
 def screenshot_region():
