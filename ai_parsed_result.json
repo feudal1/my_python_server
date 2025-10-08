@@ -2,19 +2,15 @@
   "thickness_groups": [
     {
       "thickness": "10mm",
-      "area_required": 0.896,
+      "area_required": 0.0,
       "components": [
         {
-          "part_name": "PL10*50*80",
-          "quantity": 112,
-          "number": "12-8",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-8PL10x50X80=112个",
           "component": "钢板",
           "thickness": "10mm"
         },
         {
-          "part_name": "PL10*50*360",
-          "quantity": 112,
-          "number": "12-9",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-9PL10x50X360=112个",
           "component": "钢板",
           "thickness": "10mm"
         }
@@ -22,201 +18,145 @@
     },
     {
       "thickness": "20mm",
-      "area_required": 199.89,
+      "area_required": 0.0,
       "components": [
         {
-          "part_name": "PL20*570*4810",
-          "quantity": 12,
-          "number": "7-4",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx7-4PL20x570X4810=12个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*1920",
-          "quantity": 18,
-          "number": "7-5",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx7-5PL20x150X1920=18个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*150",
-          "quantity": 18,
-          "number": "7-6",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx7-6PL20x150X150=18个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*570*4810",
-          "quantity": 10,
-          "number": "8-4",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx8-4PL20x570X4810=10个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*2270",
-          "quantity": 15,
-          "number": "8-5",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx8-5PL20x150X2270=15个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*150",
-          "quantity": 15,
-          "number": "8-6",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx8-6PL20x150X150=15个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*110*300",
-          "quantity": 32,
-          "number": "9-2",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-2PL20x110X300=32个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*300*350",
-          "quantity": 32,
-          "number": "9-3",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-3PL20x300X350=32个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*135*229",
-          "quantity": 128,
-          "number": "9-4",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-4PL20x135X229=128个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*135*62",
-          "quantity": 128,
-          "number": "9-5",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-5PL20x135X62=128个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*220*300",
-          "quantity": 16,
-          "number": "9-6",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-6PL20x220X300=16个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*300*700",
-          "quantity": 64,
-          "number": "9-7",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-7PL20x300X700=64个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*330*3400",
-          "quantity": 16,
-          "number": "9-8",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-8PL20x330X3400=16个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*150",
-          "quantity": 16,
-          "number": "9-9",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-9PL20x150X150=16个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*720",
-          "quantity": 16,
-          "number": "9-10",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-10PL20x150X720=16个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*135*350",
-          "quantity": 32,
-          "number": "9-13",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-13PL20x135X350=32个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*805*1810",
-          "quantity": 28,
-          "number": "10-4",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx10-4PL20x805X1810=28个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*1790",
-          "quantity": 14,
-          "number": "10-5",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx10-5PL20x150X1790=14个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*150*150",
-          "quantity": 14,
-          "number": "10-6",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx10-6PL20x150X150=14个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*250*360",
-          "quantity": 12,
-          "number": "11-13",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-13PL20x250X360=12个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*250*2732",
-          "quantity": 32,
-          "number": "11-14",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-14PL20x250X2732=32个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*250*3097",
-          "quantity": 8,
-          "number": "11-16",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-16PL20x250X3097=8个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*500*2415",
-          "quantity": 10,
-          "number": "11-18",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-18PL20x500X2415=10个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*250*7470",
-          "quantity": 16,
-          "number": "11-21",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-21PL20x250X7470=16个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*100*150",
-          "quantity": 132,
-          "number": "12-4",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-4PL20x100X150=132个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*110*400",
-          "quantity": 56,
-          "number": "12-10",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-10PL20x110X400=56个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*312*169",
-          "quantity": 64,
-          "number": "12-12",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-12PL20x312X169=64个",
           "component": "钢板",
           "thickness": "20mm"
         },
         {
-          "part_name": "PL20*270*140",
-          "quantity": 96,
-          "number": "12-13",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-13PL20x270X140=96个",
           "component": "钢板",
           "thickness": "20mm"
         }
@@ -224,61 +164,45 @@
     },
     {
       "thickness": "25mm",
-      "area_required": 37.45,
+      "area_required": 0.0,
       "components": [
         {
-          "part_name": "PL25*120*250",
-          "quantity": 20,
-          "number": "11-2",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-2PL25x120X250=20个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*250*566",
-          "quantity": 8,
-          "number": "11-3",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-3PL25x250X566=8个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*250*800",
-          "quantity": 32,
-          "number": "11-4",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-4PL25x250X800=32个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*110*123",
-          "quantity": 64,
-          "number": "11-5",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-5PL25x110X123=64个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*110*267",
-          "quantity": 64,
-          "number": "11-6",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-6PL25x110X267=64个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*110*400",
-          "quantity": 40,
-          "number": "11-7",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-7PL25x110X400=40个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*740*2695",
-          "quantity": 8,
-          "number": "11-19",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-19PL25x740X2695=8个",
           "component": "钢板",
           "thickness": "25mm"
         },
         {
-          "part_name": "PL25*560*2695",
-          "quantity": 12,
-          "number": "11-20",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-20PL25x560X2695=12个",
           "component": "钢板",
           "thickness": "25mm"
         }
@@ -286,54 +210,40 @@
     },
     {
       "thickness": "30mm",
-      "area_required": 13.44,
+      "area_required": 0.0,
       "components": [
         {
-          "part_name": "PL30*350*676.2",
-          "quantity": 32,
-          "number": "9-11",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-11PL30x350X676.2=32个",
           "component": "钢板",
           "thickness": "30mm"
         },
         {
-          "part_name": "PL30*350*1432.4",
-          "quantity": 16,
-          "number": "9-12",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx9-12PL30x350X1432.4=16个",
           "component": "钢板",
           "thickness": "30mm"
         },
         {
-          "part_name": "PL30*400*1505.6",
-          "quantity": 12,
-          "number": "11-8",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-8PL30x400X1505.6=12个",
           "component": "钢板",
           "thickness": "30mm"
         },
         {
-          "part_name": "PL30*400*1212.8",
-          "quantity": 8,
-          "number": "11-9",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-9PL30x400X1212.8=8个",
           "component": "钢板",
           "thickness": "30mm"
         },
         {
-          "part_name": "PL30*360*117",
-          "quantity": 32,
-          "number": "11-26",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-26PL30x360X117=32个",
           "component": "钢板",
           "thickness": "30mm"
         },
         {
-          "part_name": "PL30*180*330",
-          "quantity": 12,
-          "number": "12-5",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-5PL30x180X330=12个",
           "component": "钢板",
           "thickness": "30mm"
         },
         {
-          "part_name": "PL30*320*330",
-          "quantity": 36,
-          "number": "12-16",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-16PL30x320X330=36个",
           "component": "钢板",
           "thickness": "30mm"
         }
@@ -341,19 +251,15 @@
     },
     {
       "thickness": "40mm",
-      "area_required": 2.04,
+      "area_required": 0.0,
       "components": [
         {
-          "part_name": "PL40*100*140",
-          "quantity": 24,
-          "number": "12-3",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-3PL40x100X140=24个",
           "component": "钢板",
           "thickness": "40mm"
         },
         {
-          "part_name": "PL40*100*300",
-          "quantity": 72,
-          "number": "12-15",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx12-15PL40x100X300=72个",
           "component": "钢板",
           "thickness": "40mm"
         }
@@ -361,14 +267,48 @@
     },
     {
       "thickness": "50mm",
-      "area_required": 3.86,
+      "area_required": 0.0,
       "components": [
         {
-          "part_name": "PL50*80*2415",
-          "quantity": 20,
-          "number": "11-17",
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx11-17PL50x80X2415=20个",
           "component": "钢板",
           "thickness": "50mm"
+        }
+      ]
+    },
+    {
+      "thickness": "角钢",
+      "area_required": 0.0,
+      "components": [
+        {
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx7-2L45x6X420=24个",
+          "component": "角钢",
+          "thickness": "角钢"
+        },
+        {
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx7-3L45x6X4520=24个",
+          "component": "角钢",
+          "thickness": "角钢"
+        },
+        {
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx8-2L45x6X420=20个",
+          "component": "角钢",
+          "thickness": "角钢"
+        },
+        {
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx8-3L45x6X4520=20个",
+          "component": "角钢",
+          "thickness": "角钢"
+        },
+        {
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx10-2L45x6X660=56个",
+          "component": "角钢",
+          "thickness": "角钢"
+        },
+        {
+          "part_name": "F:\\陈启鸿\\三宝\\10.7\\三宝.xlsx10-3L45x6X1520=56个",
+          "component": "角钢",
+          "thickness": "角钢"
         }
       ]
     }
