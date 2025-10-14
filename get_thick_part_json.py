@@ -5,7 +5,7 @@ import requests
 import os
 import logging
 from flask import Flask, request, jsonify
-
+from urllib.parse import unquote
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,6 +39,9 @@ def process_excel_api():
     """
     # 获取查询参数
     filepath = request.args.get('filepath')
+    if filepath:
+        filepath = filepath.strip("\"")
+        filepath = unquote(filepath)  # 添加URL解码
     sheet_name = request.args.get('sheet_name', '零件清单')
     import os
     filename_with_ext = os.path.basename(filepath) if filepath else ""
@@ -81,15 +84,24 @@ def process_excel_api():
            
                 {{
                 "part_name": "{filename }10-2PL10x570X4810=5件",
-                 "area_required":"13.7"
-                "component": "钢板"
-                 "thickness": "10mm",
+                 
+               
+                
+                "长度":"570",
+                    "宽度":"420",
+                    "数量":"4810",
+               "类型":"钢板",
+                 "厚度": "10",
                 }},
                   {{
                 "part_name": "{filename }8-2L45*6*420=6件",
-                 "area_required":"2.52"
-                "component": "角钢"
-                 "thickness": "6mm",
+               
+                
+                "长度":"420",
+                "数量":"6",
+                
+                "类型":"角钢",
+                 "厚度": "6",
                 }},
                 
             
@@ -149,12 +161,76 @@ def process_excel_api():
         else:
             logger.warning("未在AI响应中找到JSON标记")
         
+        # 新增步骤：调用计算钢材参数的服务
+        calculated_data = None
+        if structured_data:
+            try:
+                # 调用/json_to_excel服务中的calculate_steel_data接口来计算钢材参数
+                calculate_url = "http://localhost:5005/calculate_steel_data"
+                calculate_payload = {"data": structured_data}
+                
+                calculate_response = requests.post(calculate_url, json=calculate_payload)
+                
+                if calculate_response.status_code == 200:
+                    calculate_result = calculate_response.json()
+                    calculated_data = calculate_result.get("data")
+                    logger.info("钢材参数计算完成")
+                    
+                    # 保存计算结果到文件
+                    calc_save_path = os.path.join(os.getcwd(), 'calculated_result.json')
+                    with open(calc_save_path, 'w', encoding='utf-8') as f:
+                        json.dump(calculated_data, f, ensure_ascii=False, indent=2)
+                    logger.info(f"计算结果已保存至: {calc_save_path}")
+                else:
+                    logger.error(f"计算钢材参数失败: {calculate_response.text}")
+                    
+            except Exception as calc_err:
+                logger.error(f"调用计算服务时出错: {str(calc_err)}")
+                pass
+        
+     # 移除这部分代码 - 从"新增功能"到保存原始结构化数据的部分
+# 保留计算结果保存的部分
+
+# 修改后的代码片段如下：
+
+        # 新增功能：调用/json_file_to_excel将计算结果保存为Excel文件
+        saved_calculated_excel_path = None
+        if calculated_data:
+            try:
+                # 构造保存的文件名
+                calculated_excel_filename = f"output/{filename}_calculated_data.xlsx"
+                # 在实际使用前确保目录存在
+                os.makedirs(os.path.dirname(calculated_excel_filename), exist_ok=True)
+                
+                # 保存带有计算结果的数据为Excel文件
+                json_to_excel_url = "http://localhost:5005/save_structured_data"
+                calculated_excel_params = {"filename": calculated_excel_filename}
+                calculated_excel_payload = {"structured_data": calculated_data}
+                
+                calculated_excel_response = requests.post(
+                    json_to_excel_url,
+                    params=calculated_excel_params,
+                    json=calculated_excel_payload
+                )
+                
+                if calculated_excel_response.status_code == 200:
+                    calculated_excel_result = calculated_excel_response.json()
+                    saved_calculated_excel_path = calculated_excel_result.get("file_path")
+                    logger.info(f"计算结果已保存为Excel文件: {saved_calculated_excel_path}")
+                else:
+                    logger.error(f"保存计算结果Excel文件失败: {calculated_excel_response.text}")
+                        
+            except Exception as save_excel_err:
+                logger.error(f"调用保存Excel服务时出错: {str(save_excel_err)}")
+                pass
+        
         # 返回处理后的数据
         return jsonify({
             "status": "success",
-
             # "excel_data": excel_data,
-            "structured_data": structured_data  # 已解析的结构化数据
+            "structured_data": structured_data,  # 已解析的结构化数据
+            "calculated_data": calculated_data,  # 带计算结果的数据
+            "saved_calculated_excel_path": saved_calculated_excel_path  # 计算结果保存的Excel文件路径
         })
         
     except requests.exceptions.RequestException as e:
@@ -166,7 +242,6 @@ def process_excel_api():
     except Exception as e:
         logger.error(f"处理过程中出错: {str(e)}")
         return jsonify({"error": f"处理过程中出错: {str(e)}"}), 500
-
 @app.route('/health', methods=['GET'])
 def health_check():
     """

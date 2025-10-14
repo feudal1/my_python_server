@@ -87,6 +87,13 @@ def start_servers():
             "cwd": "E:\\code\\my_python_server",
             "log_file": "logs/thick_part.log"
             
+        },
+            {
+            "name": "json2excel Server",
+            "command": "micromambavenv\\python json2excel.py",
+            "cwd": "E:\\code\\my_python_server",
+            "log_file": "logs/json2excel.log"
+            
         }
         
     ]
