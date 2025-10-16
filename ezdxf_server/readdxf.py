@@ -280,6 +280,117 @@ def get_dxf_texts():
             'message': f"处理文件时出错: {str(e)}"
         }), 500
 
+def generate_entity_signature(entity):
+    """
+    为实体生成特征签名，用于跨文件匹配
+    
+    Args:
+        entity: DXF实体对象
+        
+    Returns:
+        dict: 实体的特征签名
+    """
+    signature = {
+        "type": entity.dxftype(),
+        "handle": entity.dxf.handle if hasattr(entity.dxf, 'handle') else None
+    }
+    
+    if entity.dxftype() == 'LINE':
+        start = entity.dxf.start
+        end = entity.dxf.end
+        # 为了便于匹配，对起点和终点进行排序
+        points = sorted([(round(start.x, 6), round(start.y, 6)), 
+                         (round(end.x, 6), round(end.y, 6))])
+        signature.update({
+            "start": points[0],
+            "end": points[1],
+            "length": round(((end.x - start.x)**2 + (end.y - start.y)**2)**0.5, 6)
+        })
+    elif entity.dxftype() == 'CIRCLE':
+        center = entity.dxf.center
+        signature.update({
+            "center": (round(center.x, 6), round(center.y, 6)),
+            "radius": round(entity.dxf.radius, 6)
+        })
+    elif entity.dxftype() == 'ARC':
+        center = entity.dxf.center
+        signature.update({
+            "center": (round(center.x, 6), round(center.y, 6)),
+            "radius": round(entity.dxf.radius, 6),
+            "start_angle": round(entity.dxf.start_angle, 6),
+            "end_angle": round(entity.dxf.end_angle, 6)
+        })
+    elif entity.dxftype() == 'SPLINE':
+        signature.update({
+            "degree": entity.dxf.degree if hasattr(entity.dxf, 'degree') else None,
+            "fit_points_count": len(entity.fit_points) if hasattr(entity, 'fit_points') else 0,
+            "control_points_count": len(entity.control_points) if hasattr(entity, 'control_points') else 0
+        })
+        
+    return signature
+@app.route('/objects/signatures', methods=['GET'])
+def get_dxf_signatures():
+    """
+    获取DXF/DWG文件中所有对象的签名信息
+    
+    Query Parameters:
+        dxf_path: DXF或DWG文件路径
+        
+    Returns:
+        JSON格式的对象签名列表
+    """
+    file_path = request.args.get('dxf_path')
+    if not file_path:
+        return jsonify({
+            "status": "error", 
+            "message": "缺少dxf_path参数"
+        }), 400
+
+    if not os.path.exists(file_path):
+        return jsonify({
+            "status": "error", 
+            "message": f"文件不存在: {file_path}"
+        }), 404
+
+    file_ext = os.path.splitext(file_path)[1].lower()
+
+    try:
+        # 如果是DWG文件，先转换为DXF
+        if file_ext == '.dwg':
+            conversion_result = convert_dwg_to_dxf(file_path)
+            if conversion_result["status"] != "success":
+                return jsonify(conversion_result), 500
+            dxf_file_path = conversion_result["dxf_path"]
+        elif file_ext == '.dxf':
+            dxf_file_path = file_path
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。"
+            }), 400
+
+        # 读取DXF文件并收集对象签名
+        doc = ezdxf.readfile(dxf_file_path)
+        msp = doc.modelspace()
+
+        # 收集所有对象签名
+        signatures = []
+        for entity in msp:
+            signature = generate_entity_signature(entity)
+            signatures.append(signature)
+
+        return jsonify({
+            'status': 'success',
+            'signatures': signatures,
+            'object_count': len(signatures),
+            'file_path': dxf_file_path
+        })
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f"处理文件时出错: {str(e)}"
+        }), 500
 def process_dxf_file(dxf_file_path, highlight_random=False):
     """
     处理DXF文件并生成图像
@@ -377,6 +488,8 @@ def process_dxf_file(dxf_file_path, highlight_random=False):
         all_x_coords = []
         all_y_coords = []
 
+        highlighted_entity_signature = None
+
         for entity in msp:
             # 判断当前实体是否为高亮实体
             is_highlighted = (entity is highlighted_entity)
@@ -406,6 +519,8 @@ def process_dxf_file(dxf_file_path, highlight_random=False):
                 if is_highlighted:
                     # 单独绘制高亮线段
                     ax.plot([start.x, end.x], [start.y, end.y], color=color, linewidth=linewidth)
+                    # 生成高亮实体签名
+                    highlighted_entity_signature = generate_entity_signature(entity)
                 else:
                     # 添加到普通线段集合
                     lines.append([(start.x, start.y), (end.x, end.y)])
@@ -428,6 +543,8 @@ def process_dxf_file(dxf_file_path, highlight_random=False):
                         x_coords = [p[0] for p in points]
                         y_coords = [p[1] for p in points]
                         ax.plot(x_coords, y_coords, color=color, linewidth=linewidth)
+                        # 生成高亮实体签名
+                        highlighted_entity_signature = generate_entity_signature(entity)
                     else:
                         # 对于普通样条曲线，只绘制起点和终点之间的连线
                         if len(points) >= 2:
@@ -457,6 +574,8 @@ def process_dxf_file(dxf_file_path, highlight_random=False):
                                     theta1=start_angle, theta2=end_angle,
                                     color=color, linewidth=linewidth)
                     ax.add_patch(arc_patch)
+                    # 生成高亮实体签名
+                    highlighted_entity_signature = generate_entity_signature(entity)
                 else:
                     # 普通圆弧用原始颜色绘制
                     arc_patch = Arc((center.x, center.y), 2*radius, 2*radius, angle=0,
@@ -478,6 +597,8 @@ def process_dxf_file(dxf_file_path, highlight_random=False):
                     circle_patch = plt.Circle((center.x, center.y), radius, fill=False, 
                                             color=color, linewidth=linewidth)
                     ax.add_patch(circle_patch)
+                    # 生成高亮实体签名
+                    highlighted_entity_signature = generate_entity_signature(entity)
                 else:
                     # 普通圆形用原始颜色绘制
                     circle_patch = plt.Circle((center.x, center.y), radius, fill=False, 
@@ -517,10 +638,11 @@ def process_dxf_file(dxf_file_path, highlight_random=False):
             "output_path": output_path
         }
         
-        # 如果有高亮实体，返回其类型和特征信息
+        # 如果有高亮实体，返回其类型和特征信息及签名
         if highlighted_entity:
             entity_info = {
-                "type": highlighted_entity.dxftype()
+                "type": highlighted_entity.dxftype(),
+                "signature": highlighted_entity_signature
             }
             
             # 添加不同类型实体的特征信息
@@ -717,13 +839,12 @@ def home():
             "highlight_random": "GET /highlight_random?dxf_path=<path_to_dxf_or_dwg_file> (随机高亮一个对象并返回JSON结果)",
             "view_highlighted": "GET /view_highlighted?dxf_path=<path_to_dxf_or_dwg_file> (在网页中查看随机高亮结果)",
             "image": "GET /image?path=<path_to_image> (获取图像文件)",
-            "objects_all": "GET /objects/all?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象类型)"
+            "objects_all": "GET /objects/all?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象类型)",
+            "objects_signatures": "GET /objects/signatures?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象签名)"
         },
         "notes": "支持DXF和DWG文件格式。DWG文件会自动转换为DXF格式后再处理。",
         "example": "GET /view_dxf?dxf_path=C:\\test\\example.dwg"
     })
-
-
 # HTML模板
 HTML_TEMPLATE = """
 <!DOCTYPE html>

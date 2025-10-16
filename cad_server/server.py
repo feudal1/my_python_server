@@ -350,31 +350,7 @@ def screenshot_region_base64():
             'status': 'error',
             'message': str(e)
         }), 500
-# 在 server.py 文件中添加根路径路由
-@app.route('/', methods=['GET'])
-def home():
-    """
-    API根路径，返回API服务器信息和可用端点列表
-    
-    Returns:
-        JSON格式的API信息
-    """
-    return jsonify({
-        'status': 'success',
-        'message': 'AutoCAD Server API is running',
-        'version': '1.0.0',
-        'available_endpoints': [
-            'GET / - API根路径',
-            'GET /objects/all - 获取所有对象类名',
-            'GET /model/bounds - 获取模型空间边界框',
-            'GET /screenshot/region - 截取AutoCAD指定区域截图',
-            'GET /screenshot/region/base64 - 截取AutoCAD指定区域截图并返回base64编码',
-            'GET /delete-area - 删除指定区域内的对象',
-            'GET /edit/undo - 执行撤销操作',
-            'GET/POST /command/echo - 在AutoCAD命令行显示文本信息'
-        ],
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-    })
+
 @app.route('/delete-area', methods=['GET'])
 def delete_area():
     """
@@ -423,7 +399,125 @@ def delete_area():
             'status': 'error',
             'message': str(e)
         }), 500
+# 在 server.py 文件中添加以下代码
 
+@app.route('/objects/perimeters', methods=['GET'])
+def get_selected_objects_perimeters():
+    """
+    获取AutoCAD中选中对象的周长信息
+    
+    Returns:
+        JSON格式的周长列表和详细信息
+    """
+    try:
+        pythoncom.CoInitialize()
+        acad = Autocad()
+        
+        # 创建临时选择集
+        try:
+            sel_set = acad.doc.SelectionSets.Add("TempPerimeterSet")
+        except:
+            # 如果已存在同名选择集，则先删除再创建
+            try:
+                acad.doc.SelectionSets.Item("TempPerimeterSet").Delete()
+                sel_set = acad.doc.SelectionSets.Add("TempPerimeterSet")
+            except:
+                return jsonify({
+                    'status': 'error',
+                    'message': '无法创建选择集'
+                }), 500
+        
+        # 提示用户选择对象
+        sel_set.SelectOnScreen()
+        
+        # 如果没有选中对象
+        if sel_set.Count == 0:
+            sel_set.Delete()
+            return jsonify({
+                'status': 'success',
+                'message': '未选择任何对象',
+                'perimeters': [],
+                'count': 0
+            })
+        
+        # 存储周长信息
+        perimeters = []
+        objects_info = []
+        
+        # 遍历选中的对象
+        for i in range(sel_set.Count):
+            obj = sel_set.Item(i)
+            
+            # 获取对象的基本信息
+            obj_info = {
+                'index': i,
+                'object_name': getattr(obj, 'ObjectName', 'Unknown'),
+                'handle': getattr(obj, 'Handle', 'Unknown')
+            }
+            
+            # 尝试获取周长信息
+            perimeter = None
+            
+            # 不同类型的对象有不同的周长属性
+            if hasattr(obj, 'Length'):
+                perimeter = obj.Length
+            elif hasattr(obj, 'Circumference'):
+                perimeter = obj.Circumference
+            
+            obj_info['perimeter'] = perimeter
+            perimeters.append(perimeter)
+            objects_info.append(obj_info)
+        
+        # 清理选择集
+        sel_set.Delete()
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'成功获取{sel_set.Count}个对象的周长信息',
+            'perimeters': perimeters,
+            'objects_info': objects_info,
+            'count': len(perimeters),
+            'valid_perimeter_count': len([p for p in perimeters if p is not None])
+        })
+        
+    except Exception as e:
+        # 清理可能残留的选择集
+        try:
+            acad.doc.SelectionSets.Item("TempPerimeterSet").Delete()
+        except:
+            pass
+            
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    
+# 修改 '/' 路由中的 available_endpoints 列表，添加新的一行：
+@app.route('/', methods=['GET'])
+def home():
+    """
+    API根路径，返回API服务器信息和可用端点列表
+    
+    Returns:
+        JSON格式的API信息
+    """
+    return jsonify({
+        'status': 'success',
+        'message': 'AutoCAD Server API is running',
+        'version': '1.0.0',
+        'available_endpoints': [
+            'GET / - API根路径',
+            'GET /objects/all - 获取所有对象类名',
+            'GET /objects/perimeters - 获取选中对象的周长信息',
+            'GET /model/bounds - 获取模型空间边界框',
+            'GET /screenshot/region - 截取AutoCAD指定区域截图',
+            'GET /screenshot/region/base64 - 截取AutoCAD指定区域截图并返回base64编码',
+            'GET /delete-area - 删除指定区域内的对象',
+            'GET /edit/undo - 执行撤销操作',
+            'GET/POST /command/echo - 在AutoCAD命令行显示文本信息'
+        ],
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+    })
 if __name__ == '__main__':
     # 启动Flask服务器，默认端口5300
     app.run(host='0.0.0.0', port=5300, debug=True)
