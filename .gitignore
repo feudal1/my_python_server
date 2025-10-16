@@ -5,3 +5,6 @@
 micromambavenv
 output/*
 *formatted_data*
+*ai_parsed_result.json
+*calculated_result.json
+*cad_parsed_result

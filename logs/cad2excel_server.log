@@ -1,0 +1,92 @@
+ * Serving Flask app 'extract_parts_from_drawing'
+ * Debug mode: on
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5303
+ * Running on http://192.168.10.205:5303
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+INFO:werkzeug: * Restarting with stat
+WARNING:werkzeug: * Debugger is active!
+INFO:werkzeug: * Debugger PIN: 127-181-769
+INFO:__main__:正在从AutoCAD获取文本对象...
+INFO:__main__:正在调用LLM服务处理文本...
+INFO:__main__:提取到的JSON内容: [
+    {
+        "part_name": "PL50x196=50件",
+        "长度": "196",
+        "宽度": "",
+        "数量": "50",
+        "类型": "钢板",
+        "厚度": "6"
+    },
+    {
+        "part_name": "PL70x70=40件",
+        "长度": "70",
+        "宽度": "",
+        "数量": "40",
+        "类型": "钢板",
+        "厚度": "8"
+    },
+    {
+        "part_name": "PL80x5900=3件",
+        "长度": "5900",
+        "宽度": "",
+        "数量": "3",
+        "类型": "钢板",
+        "厚度": "8"
+    },
+    {
+        "part_name": "PL100x130=20件",
+        "长度": "130",
+        "宽度": "",
+        "数量": "20",
+        "类型": "钢板",
+        "厚度": "10"
+    },
+    {
+        "part_name": "PL100x130=10件",
+        "长度": "130",
+        "宽度": "",
+        "数量": "10",
+        "类型": "钢板",
+        "厚度": "10"
+    },
+    {
+        "part_name": "PD30x2x190=20件",
+        "长度": "190",
+        "宽度": "",
+        "数量": "20",
+        "类型": "钢管",
+        "厚度": "2"
+    },
+    {
+        "part_name": "L50x50x110=50件",
+        "长度": "110",
+        "宽度": "",
+        "数量": "50",
+        "类型": "角钢",
+        "厚度": "5"
+    },
+    {
+        "part_name": "L75x75x590=50件",
+        "长度": "590",
+        "宽度": "",
+        "数量": "50",
+        "类型": "角钢",
+        "厚度": "10"
+    },
+    {
+        "part_name": "L90x140x2440=1件",
+        "长度": "2440",
+        "宽度": "",
+        "数量": "1",
+        "类型": "角钢",
+        "厚度": "10"
+    }
+]
+INFO:__main__:JSON解析成功
+INFO:__main__:结果已保存至: E:\code\my_python_server\output\cad_parsed_result.json
+INFO:__main__:钢材参数计算完成
+INFO:__main__:计算结果已保存至: E:\code\my_python_server\output\calculated_result.json
+INFO:__main__:计算结果已保存为Excel文件: E:\code\my_python_server\output\calculated_data.xlsx
+INFO:werkzeug:127.0.0.1 - - [16/Oct/2025 19:28:24] "GET /extract-parts HTTP/1.1" 200 -

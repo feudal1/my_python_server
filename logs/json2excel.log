@@ -8,49 +8,6 @@ INFO:werkzeug:[33mPress CTRL+C to quit[0m
 INFO:werkzeug: * Restarting with stat
 WARNING:werkzeug: * Debugger is active!
 INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:__main__:Excel文件已保存至: E:\code\my_python_server\达昊_structured_data.xlsx
-INFO:werkzeug:127.0.0.1 - - [14/Oct/2025 19:48:57] "POST /save_structured_data?filename=达昊_structured_data.xlsx HTTP/1.1" 200 -
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\json2excel.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug:127.0.0.1 - - [14/Oct/2025 20:11:28] "POST /calculate_steel_data HTTP/1.1" 200 -
-INFO:__main__:Excel文件已保存至: E:\code\my_python_server\output\达昊_structured_data.xlsx
-INFO:werkzeug:127.0.0.1 - - [14/Oct/2025 20:11:30] "POST /save_structured_data?filename=output/达昊_structured_data.xlsx HTTP/1.1" 200 -
-INFO:__main__:Excel文件已保存至: E:\code\my_python_server\output\达昊_calculated_data.xlsx
-INFO:werkzeug:127.0.0.1 - - [14/Oct/2025 20:11:31] "POST /save_structured_data?filename=output/达昊_calculated_data.xlsx HTTP/1.1" 200 -
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\get_thick_part_json.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
-INFO:werkzeug:127.0.0.1 - - [14/Oct/2025 20:19:29] "POST /calculate_steel_data HTTP/1.1" 200 -
-INFO:__main__:Excel文件已保存至: E:\code\my_python_server\output\达昊_calculated_data.xlsx
-INFO:werkzeug:127.0.0.1 - - [14/Oct/2025 20:19:31] "POST /save_structured_data?filename=output/达昊_calculated_data.xlsx HTTP/1.1" 200 -
-INFO:werkzeug: * Detected change in 'E:\\code\\my_python_server\\json2excel.py', reloading
-INFO:werkzeug: * Restarting with stat
-WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
+INFO:werkzeug:127.0.0.1 - - [16/Oct/2025 19:28:23] "POST /calculate_steel_data HTTP/1.1" 200 -
+INFO:__main__:Excel文件已保存至: E:\code\my_python_server\output\calculated_data.xlsx
+INFO:werkzeug:127.0.0.1 - - [16/Oct/2025 19:28:24] "POST /save_structured_data?filename=output/calculated_data.xlsx HTTP/1.1" 200 -

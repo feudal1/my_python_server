@@ -110,6 +110,25 @@ def start_servers():
             "command": "micromambavenv\\python ezdxf_server\\readdxf.py",
             "cwd": "E:\\code\\my_python_server",
             "log_file": "logs/ezcad_server.log"
+        },
+        {
+            "name": "cad2excel Server",
+            "command": "micromambavenv\\python cad_server\\extract_parts_from_drawing.py",
+            "cwd": "E:\\code\\my_python_server",
+            "log_file": "logs/cad2excel_server.log"
+        },
+        {
+            "name": "LLM Server",
+            "command": "micromambavenv\\python llm_server\llm_server.py",
+            "cwd": "E:\\code\\my_python_server",
+            "log_file": "logs/llm.log"
+        },
+            {
+            "name": "json2excel Server",
+            "command": "micromambavenv\\python excel_server\\json2excel.py",
+            "cwd": "E:\\code\\my_python_server",
+            "log_file": "logs/json2excel.log"
+            
         }
     ]
     dino_servers = [

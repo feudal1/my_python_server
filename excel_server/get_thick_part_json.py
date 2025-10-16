@@ -177,7 +177,7 @@ def process_excel_api():
                     logger.info("钢材参数计算完成")
                     
                     # 保存计算结果到文件
-                    calc_save_path = os.path.join(os.getcwd(), 'calculated_result.json')
+                    calc_save_path = os.path.join(os.getcwd(), 'output\calculated_result.json')
                     with open(calc_save_path, 'w', encoding='utf-8') as f:
                         json.dump(calculated_data, f, ensure_ascii=False, indent=2)
                     logger.info(f"计算结果已保存至: {calc_save_path}")

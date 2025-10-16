@@ -401,6 +401,16 @@ def delete_area():
         }), 500
 # 在 server.py 文件中添加以下代码
 
+# 在 server.py 文件中替换 /objects/perimeters 路由为以下代码：
+
+# 替换 /objects/perimeters 路由为以下代码：
+
+# 替换 /objects/perimeters 路由为以下代码：
+
+
+
+# 替换 /objects/perimeters 路由为以下代码：
+
 @app.route('/objects/perimeters', methods=['GET'])
 def get_selected_objects_perimeters():
     """
@@ -409,30 +419,75 @@ def get_selected_objects_perimeters():
     Returns:
         JSON格式的周长列表和详细信息
     """
+    pythoncom.CoInitialize()
     try:
-        pythoncom.CoInitialize()
         acad = Autocad()
         
-        # 创建临时选择集
+        # 检查是否存在活动文档
         try:
-            sel_set = acad.doc.SelectionSets.Add("TempPerimeterSet")
-        except:
-            # 如果已存在同名选择集，则先删除再创建
-            try:
-                acad.doc.SelectionSets.Item("TempPerimeterSet").Delete()
-                sel_set = acad.doc.SelectionSets.Add("TempPerimeterSet")
-            except:
+            doc = acad.doc
+            if doc is None:
                 return jsonify({
                     'status': 'error',
-                    'message': '无法创建选择集'
-                }), 500
+                    'message': '没有打开的AutoCAD文档'
+                }), 400
+        except:
+            return jsonify({
+                'status': 'error',
+                'message': '无法连接到AutoCAD文档'
+            }), 400
+        
+        # 获取所有已存在的选择集名称
+        existing_selection_sets = []
+        try:
+            for i in range(doc.SelectionSets.Count):
+                try:
+                    selSetName = doc.SelectionSets.Item(i).Name
+                    existing_selection_sets.append(selSetName)
+                except:
+                    continue
+        except:
+            pass
+        
+        # 生成唯一的选择集名称
+        sel_set_name = "PerimeterSet_" + str(int(time.time() * 1000))
+        # 确保名称唯一
+        counter = 0
+        original_name = sel_set_name
+        while sel_set_name in existing_selection_sets:
+            sel_set_name = original_name + "_" + str(counter)
+            counter += 1
+        
+        # 创建选择集
+        try:
+            sel_set = doc.SelectionSets.Add(sel_set_name)
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'message': f'无法创建选择集: {str(e)}'
+            }), 500
         
         # 提示用户选择对象
-        sel_set.SelectOnScreen()
+        try:
+            sel_set.SelectOnScreen()
+        except Exception as e:
+            # 清理选择集
+            try:
+                sel_set.Delete()
+            except:
+                pass
+            return jsonify({
+                'status': 'error',
+                'message': f'选择对象时出错: {str(e)}'
+            }), 500
         
         # 如果没有选中对象
         if sel_set.Count == 0:
-            sel_set.Delete()
+            # 清理选择集
+            try:
+                sel_set.Delete()
+            except:
+                pass
             return jsonify({
                 'status': 'success',
                 'message': '未选择任何对象',
@@ -440,59 +495,228 @@ def get_selected_objects_perimeters():
                 'count': 0
             })
         
-        # 存储周长信息
-        perimeters = []
+        # 存储对象详细信息
         objects_info = []
         
         # 遍历选中的对象
         for i in range(sel_set.Count):
-            obj = sel_set.Item(i)
-            
-            # 获取对象的基本信息
-            obj_info = {
-                'index': i,
-                'object_name': getattr(obj, 'ObjectName', 'Unknown'),
-                'handle': getattr(obj, 'Handle', 'Unknown')
-            }
-            
-            # 尝试获取周长信息
-            perimeter = None
-            
-            # 不同类型的对象有不同的周长属性
-            if hasattr(obj, 'Length'):
-                perimeter = obj.Length
-            elif hasattr(obj, 'Circumference'):
-                perimeter = obj.Circumference
-            
-            obj_info['perimeter'] = perimeter
-            perimeters.append(perimeter)
-            objects_info.append(obj_info)
+            try:
+                obj = sel_set.Item(i)
+                
+                # 直接获取对象的基本信息
+                obj_info = {
+                    'index': i,
+                    'object_name': 'Unknown',
+                    'entity_type': 'Unknown',
+                    'handle': 'Unknown'
+                }
+                
+                # 尝试获取基本信息
+                try:
+                    if hasattr(obj, 'ObjectName'):
+                        obj_info['object_name'] = obj.ObjectName
+                except:
+                    pass
+                    
+                try:
+                    if hasattr(obj, 'EntityType'):
+                        obj_info['entity_type'] = obj.EntityType
+                except:
+                    pass
+                    
+                try:
+                    if hasattr(obj, 'Handle'):
+                        obj_info['handle'] = obj.Handle
+                except:
+                    pass
+                
+                # 获取所有可访问的属性（使用更保守的方法）
+                accessible_attrs = {}
+                perimeter = None
+                
+                # 尝试获取常见属性
+                common_attributes = [
+                    'Length', 'Circumference', 'Perimeter', 'Area',
+                    'ObjectName', 'Handle', 'EntityType', 'Color',
+                    'Layer', 'Linetype', 'Visible',"Closed"
+                ]
+                
+                for attr_name in common_attributes:
+                    try:
+                        if hasattr(obj, attr_name):
+                            value = getattr(obj, attr_name)
+                            # 特殊处理点坐标
+                            if hasattr(value, 'x') and hasattr(value, 'y'):
+                                point_data = {
+                                    'x': float(value.x) if hasattr(value, 'x') else None,
+                                    'y': float(value.y) if hasattr(value, 'y') else None
+                                }
+                                if hasattr(value, 'z'):
+                                    point_data['z'] = float(value.z)
+                                accessible_attrs[attr_name] = point_data
+                            else:
+                                accessible_attrs[attr_name] = value
+                                
+                                # 检查是否是我们需要的周长相关属性
+                                if attr_name in ['Length', 'Circumference', 'Perimeter'] and value is not None:
+                                    try:
+                                        # 确保是数值类型
+                                        perimeter_value = float(value)
+                                        if perimeter is None:  # 优先使用第一个找到的有效值
+                                            perimeter = perimeter_value
+                                    except (ValueError, TypeError):
+                                        pass
+                    except Exception as attr_err:
+                        accessible_attrs[attr_name] = f"Error: {str(attr_err)}"
+                
+                # 如果还是没有找到周长，尝试使用AutoCAD命令方式获取
+                if perimeter is None:
+                    try:
+                        # 使用AutoCAD的LIST命令获取对象信息
+                        # 这里我们只记录需要通过命令获取的事实
+                        accessible_attrs['RequiresCommandQuery'] = True
+                    except:
+                        pass
+                
+                obj_info.update({
+                    'perimeter': perimeter,
+                    'accessible_attributes': accessible_attrs
+                })
+                
+                objects_info.append(obj_info)
+                
+            except Exception as obj_err:
+                objects_info.append({
+                    'index': i,
+                    'error': str(obj_err),
+                    'object_name': 'Error',
+                    'perimeter': None
+                })
         
         # 清理选择集
-        sel_set.Delete()
+        try:
+            sel_set.Delete()
+        except:
+            pass
+        
+        perimeters_list = [obj['perimeter'] for obj in objects_info]
         
         return jsonify({
             'status': 'success',
-            'message': f'成功获取{sel_set.Count}个对象的周长信息',
-            'perimeters': perimeters,
-            'objects_info': objects_info,
-            'count': len(perimeters),
-            'valid_perimeter_count': len([p for p in perimeters if p is not None])
+            'message': f'成功获取{len(objects_info)}个对象的详细信息',
+            'objects_count': len(objects_info),
+            'perimeters': perimeters_list,
+            'valid_perimeter_count': len([p for p in perimeters_list if p is not None]),
+            'objects_info': objects_info
         })
         
     except Exception as e:
-        # 清理可能残留的选择集
-        try:
-            acad.doc.SelectionSets.Item("TempPerimeterSet").Delete()
-        except:
-            pass
-            
         return jsonify({
             'status': 'error',
             'message': str(e)
         }), 500
+    finally:
+        pythoncom.CoUninitialize()
+
+
+
+@app.route('/objects/texts', methods=['GET'])
+def get_all_texts():
+    """
+    获取AutoCAD中所有文本对象的信息
     
-# 修改 '/' 路由中的 available_endpoints 列表，添加新的一行：
+    Returns:
+        JSON格式的文本对象列表和详细信息
+    """
+    try:
+        pythoncom.CoInitialize()
+        acad = Autocad()
+        
+        # 获取模型空间
+        model_space = acad.doc.ModelSpace
+        
+        # 存储文本对象信息
+        texts_info = []
+        
+        # 遍历模型空间中的所有对象
+        for i, obj in enumerate(model_space):
+            try:
+                # 检查对象是否为文本类型
+                if hasattr(obj, 'ObjectName'):
+                    object_name = obj.ObjectName
+                    
+                    # 处理不同类型的文本对象
+                    text_info = {
+                        'index': i,
+                        'object_name': object_name,
+                        'handle': getattr(obj, 'Handle', 'Unknown'),
+                        'text_string': '',
+                        'position': {},
+                        'layer': getattr(obj, 'Layer', 'Unknown')
+                    }
+                    
+                    # 处理单行文本 (AcDbText)
+                    if object_name == 'AcDbText':
+                        text_info['text_string'] = getattr(obj, 'TextString', '')
+                        insertion_point = getattr(obj, 'InsertionPoint', None)
+                        if insertion_point:
+                            text_info['position'] = {
+                                'x': insertion_point[0],
+                                'y': insertion_point[1],
+                                'z': insertion_point[2] if len(insertion_point) > 2 else 0
+                            }
+                    
+                    # 处理多行文本 (AcDbMText)
+                    elif object_name == 'AcDbMText':
+                        text_info['text_string'] = getattr(obj, 'TextString', '')
+                        insertion_point = getattr(obj, 'InsertionPoint', None)
+                        if insertion_point:
+                            text_info['position'] = {
+                                'x': insertion_point[0],
+                                'y': insertion_point[1],
+                                'z': insertion_point[2] if len(insertion_point) > 2 else 0
+                            }
+                    
+                    # 处理属性文本 (AcDbAttribute)
+                    elif object_name == 'AcDbAttribute':
+                        text_info['text_string'] = getattr(obj, 'TextString', '')
+                        insertion_point = getattr(obj, 'InsertionPoint', None)
+                        if insertion_point:
+                            text_info['position'] = {
+                                'x': insertion_point[0],
+                                'y': insertion_point[1],
+                                'z': insertion_point[2] if len(insertion_point) > 2 else 0
+                            }
+                    
+                    # 如果找到了文本信息，则添加到结果列表
+                    if text_info['text_string']:
+                        texts_info.append(text_info)
+                        
+            except Exception as obj_err:
+                # 记录错误但继续处理其他对象
+                texts_info.append({
+                    'index': i,
+                    'error': str(obj_err),
+                    'object_name': getattr(obj, 'ObjectName', 'Unknown') if 'obj' in locals() else 'Unknown'
+                })
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'成功获取{len(texts_info)}个文本对象',
+            'texts_count': len(texts_info),
+            'texts_info': texts_info
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        pythoncom.CoUninitialize()
+
+
+
 @app.route('/', methods=['GET'])
 def home():
     """
@@ -509,6 +733,7 @@ def home():
             'GET / - API根路径',
             'GET /objects/all - 获取所有对象类名',
             'GET /objects/perimeters - 获取选中对象的周长信息',
+            'GET /objects/texts - 获取所有文本对象信息',
             'GET /model/bounds - 获取模型空间边界框',
             'GET /screenshot/region - 截取AutoCAD指定区域截图',
             'GET /screenshot/region/base64 - 截取AutoCAD指定区域截图并返回base64编码',

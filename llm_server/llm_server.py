@@ -1,3 +1,4 @@
+# llm_server.py
 import os
 from dotenv import load_dotenv
 import json
@@ -98,8 +99,12 @@ class LLMService:
         response_data = response.read().decode('utf-8')
         data = json.loads(response_data)
 
-        # 将响应保存到文件
-        with open('formatted_data.json', 'w', encoding='utf-8') as f:
+        # 确保output目录存在
+        os.makedirs('output', exist_ok=True)
+        
+        # 将响应保存到文件 (修复路径分隔符问题)
+        output_file_path = os.path.join('output', 'formatted_data.json')
+        with open(output_file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
 
         # 关闭连接
@@ -176,6 +181,8 @@ def index():
     })
 
 if __name__ == "__main__":
+    # 确保output目录存在
+    os.makedirs('output', exist_ok=True)
     logger.info("启动LLM API服务...")
     logger.info("访问端口: 5003")
     app.run(host='0.0.0.0', port=5003, debug=False,use_reloader=False)
