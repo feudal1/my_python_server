@@ -827,24 +827,52 @@ def view_highlighted_dxf():
     else:
         return render_template_string(HTML_TEMPLATE, title="处理失败", message=result["message"], image_url=None), 500
 
+@app.route('/dxf_files', methods=['GET'])
+def get_dxf_files():
+    """
+    获取指定文件夹下的所有DXF文件名称
+    
+    Query Parameters:
+        folder_path: 文件夹路径（可选，默认为当前工作目录）
+        
+    Returns:
+        JSON格式的DXF文件列表
+    """
+    folder_path = request.args.get('folder_path', os.getcwd())
+    
+    if not os.path.exists(folder_path):
+        return jsonify({
+            "status": "error",
+            "message": f"文件夹不存在: {folder_path}"
+        }), 404
+        
+    if not os.path.isdir(folder_path):
+        return jsonify({
+            "status": "error",
+            "message": f"路径不是文件夹: {folder_path}"
+        }), 400
+    
+    try:
+        # 获取文件夹下所有文件
+        all_files = os.listdir(folder_path)
+        
+        # 筛选出DXF文件（包括大写和小写扩展名）
+        dxf_files = [f for f in all_files if os.path.isfile(os.path.join(folder_path, f)) 
+                     and os.path.splitext(f)[1].lower() == '.dxf']
+        
+        return jsonify({
+            "status": "success",
+            "folder_path": folder_path,
+            "dxf_files": dxf_files,
+            "count": len(dxf_files)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"读取文件夹时出错: {str(e)}"
+        }), 500
 
-# 更新根路径路由，添加新的端点信息
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        "message": "DXF/DWG处理服务已启动",
-        "endpoints": {
-            "process_dxf": "GET /process_dxf?dxf_path=<path_to_dxf_or_dwg_file> (返回JSON结果)",
-            "view_dxf": "GET /view_dxf?dxf_path=<path_to_dxf_or_dwg_file> (在网页中查看图像)",
-            "highlight_random": "GET /highlight_random?dxf_path=<path_to_dxf_or_dwg_file> (随机高亮一个对象并返回JSON结果)",
-            "view_highlighted": "GET /view_highlighted?dxf_path=<path_to_dxf_or_dwg_file> (在网页中查看随机高亮结果)",
-            "image": "GET /image?path=<path_to_image> (获取图像文件)",
-            "objects_all": "GET /objects/all?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象类型)",
-            "objects_signatures": "GET /objects/signatures?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象签名)"
-        },
-        "notes": "支持DXF和DWG文件格式。DWG文件会自动转换为DXF格式后再处理。",
-        "example": "GET /view_dxf?dxf_path=C:\\test\\example.dwg"
-    })
 # HTML模板
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -893,6 +921,22 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({
+        "message": "DXF/DWG处理服务已启动",
+        "endpoints": {
+            "process_dxf": "GET /process_dxf?dxf_path=<path_to_dxf_or_dwg_file> (返回JSON结果)",
+            "view_dxf": "GET /view_dxf?dxf_path=<path_to_dxf_or_dwg_file> (在网页中查看图像)",
+            "highlight_random": "GET /highlight_random?dxf_path=<path_to_dxf_or_dwg_file> (随机高亮一个对象并返回JSON结果)",
+            "view_highlighted": "GET /view_highlighted?dxf_path=<path_to_dxf_or_dwg_file> (在网页中查看随机高亮结果)",
+            "image": "GET /image?path=<path_to_image> (获取图像文件)",
+            "objects_all": "GET /objects/all?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象类型)",
+            "objects_signatures": "GET /objects/signatures?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象签名)",
+            "dxf_files": "GET /dxf_files?folder_path=<path_to_folder> (获取文件夹下所有DXF文件)"
+        },
+        "notes": "支持DXF和DWG文件格式。DWG文件会自动转换为DXF格式后再处理。",
+        "example": "GET /view_dxf?dxf_path=C:\\test\\example.dwg"
+    })
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5301, debug=True)

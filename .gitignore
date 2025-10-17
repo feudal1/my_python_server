@@ -8,3 +8,4 @@ output/*
 *ai_parsed_result.json
 *calculated_result.json
 *cad_parsed_result
+工作日志/*

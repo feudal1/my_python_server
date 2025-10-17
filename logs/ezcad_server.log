@@ -8,3 +8,4 @@ Press CTRL+C to quit
  * Restarting with stat
  * Debugger is active!
  * Debugger PIN: 127-181-769
+127.0.0.1 - - [17/Oct/2025 11:44:25] "GET /dxf_files?folder_path=F:\\陈启鸿\\三宝\\10.7\\20厘 HTTP/1.1" 200 -
