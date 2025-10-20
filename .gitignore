@@ -9,3 +9,4 @@ output/*
 *calculated_result.json
 *cad_parsed_result
 工作日志/*
+logs/*
