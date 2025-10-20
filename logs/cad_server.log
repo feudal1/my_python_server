@@ -7,4 +7,6 @@ WARNING: This is a development server. Do not use it in a production deployment.
 Press CTRL+C to quit
  * Restarting with stat
  * Debugger is active!
- * Debugger PIN: 127-181-769
+ * Debugger PIN: 953-550-840
+127.0.0.1 - - [19/Oct/2025 18:17:10] "GET /objects/texts HTTP/1.1" 200 -
+^C

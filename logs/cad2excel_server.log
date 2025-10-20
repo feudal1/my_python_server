@@ -7,4 +7,23 @@ INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a
 INFO:werkzeug:[33mPress CTRL+C to quit[0m
 INFO:werkzeug: * Restarting with stat
 WARNING:werkzeug: * Debugger is active!
-INFO:werkzeug: * Debugger PIN: 127-181-769
+INFO:werkzeug: * Debugger PIN: 953-550-840
+INFO:__main__:ÕıÔÚ´ÓAutoCAD»ñÈ¡ÎÄ±¾¶ÔÏó...
+INFO:__main__:ÕıÔÚµ÷ÓÃLLM·şÎñ´¦ÀíÎÄ±¾...
+INFO:__main__:ÌáÈ¡µ½µÄJSONÄÚÈİ: [
+    {
+        "part_name": "PIP140X8x1=1¼ş",
+        "³¤¶È": "1",
+        "±àºÅ": "qq-1-1µ½qq-12-2",
+        "ÊıÁ¿": "1",
+        "ÀàĞÍ": "Ô²¹Ü",
+        "ºñ¶È": "8"
+    }
+]
+INFO:__main__:JSON½âÎö³É¹¦
+INFO:__main__:½á¹ûÒÑ±£´æÖÁ: E:\code\my_python_server\output\cad_parsed_result.json
+INFO:__main__:¸Ö²Ä²ÎÊı¼ÆËãÍê³É
+INFO:__main__:¼ÆËã½á¹ûÒÑ±£´æÖÁ: E:\code\my_python_server\output\calculated_result.json
+INFO:__main__:¼ÆËã½á¹ûÒÑ±£´æÎªExcelÎÄ¼ş: E:\code\my_python_server\output\calculated_data.xlsx
+INFO:werkzeug:127.0.0.1 - - [19/Oct/2025 18:17:23] "GET /extract-parts HTTP/1.1" 200 -
+^C
