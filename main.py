@@ -106,11 +106,11 @@ def start_servers():
             "log_file": "logs/cad_server.log"
         },
         {
-            "name": "ezcad Server",
-            "command": "micromambavenv\\python ezdxf_server\\readdxf.py",
+            "name": "base Server",
+            "command": "micromambavenv\\python ezdxf_server\\base_server.py",
             "cwd": "E:\\code\\my_python_server",
-            "log_file": "logs/ezcad_server.log"
-        },
+            "log_file": "logs/base_server.log"
+        }, 
         {
             "name": "cad2excel Server",
             "command": "micromambavenv\\python cad_server\\extract_parts_from_drawing.py",

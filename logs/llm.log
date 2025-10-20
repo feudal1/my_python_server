@@ -8,3 +8,4 @@ INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a
  * Running on http://127.0.0.1:5003
  * Running on http://192.168.100.199:5003
 INFO:werkzeug:[33mPress CTRL+C to quit[0m
+^C
