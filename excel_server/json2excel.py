@@ -4,6 +4,7 @@ import json
 from flask import Flask, request, jsonify, send_file
 import os
 import logging
+from openpyxl import load_workbook
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -11,13 +12,14 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-def save_json_to_excel(json_data, filename="output.xlsx"):
+def save_json_to_excel(json_data, filename="output.xlsx", dxf_filename=None):
     """
     将JSON数据保存为Excel文件
     
     Args:
         json_data (list/dict): JSON格式的数据
         filename (str): 输出的Excel文件名
+        dxf_filename (str): DXF文件名，用于填入Excel前三行合并单元格
     
     Returns:
         str: 生成的Excel文件路径
@@ -48,13 +50,52 @@ def save_json_to_excel(json_data, filename="output.xlsx"):
         # 保存为Excel文件
         output_path = os.path.abspath(filename)
         df.to_excel(output_path, index=False)
+        
+        # 在前三行合并单元格并填入文件名
+        workbook = load_workbook(output_path)
+        worksheet = workbook.active
+        
+        # 获取最大列数
+        max_column = worksheet.max_column
+        if max_column > 0:
+            # 合并前三行的单元格
+            merge_range = f"A1:{chr(64 + max_column) if max_column <= 26 else 'Z' + chr(64 + max_column - 26)}3" if max_column > 26 else f"A1:{chr(64 + max_column)}3"
+            if max_column <= 26:
+                merge_range = f"A1:{chr(64 + max_column)}3"
+            else:
+                # 处理超过26列的情况
+                first_char = chr(64 + (max_column - 1) // 26) if (max_column - 1) // 26 > 0 else ""
+                second_char = chr(64 + ((max_column - 1) % 26) + 1)
+                last_column = first_char + second_char
+                merge_range = f"A1:{last_column}3"
+                
+            worksheet.merge_cells(merge_range)
+            
+            # 确定要显示的文件名（优先使用dxf_filename，否则使用filename）
+            display_filename = dxf_filename if dxf_filename else os.path.basename(filename)
+            
+            # 在合并的单元格中填入文件名
+            worksheet["A1"] = display_filename
+            
+            # 设置居中对齐
+            from openpyxl.styles import Alignment
+            alignment = Alignment(horizontal="center", vertical="center")
+            worksheet["A1"].alignment = alignment
+            
+            # 可选：设置字体大小
+            from openpyxl.styles import Font
+            font = Font(size=14, bold=True)
+            worksheet["A1"].font = font
+        
+        # 保存修改后的Excel文件
+        workbook.save(output_path)
+        
         logger.info(f"Excel文件已保存至: {output_path}")
         return output_path
         
     except Exception as e:
         logger.error(f"保存Excel文件时出错: {str(e)}")
         raise e
-
 @app.route('/json_to_excel', methods=['POST'])
 def convert_json_to_excel():
     """
@@ -72,6 +113,11 @@ def convert_json_to_excel():
         required: false
         default: output.xlsx
         description: 输出的Excel文件名
+      - name: dxf_filename
+        in: query
+        type: string
+        required: false
+        description: DXF文件名，将填入Excel前三行合并单元格
     responses:
       200:
         description: 成功生成Excel文件
@@ -92,15 +138,16 @@ def convert_json_to_excel():
         else:
             return jsonify({"error": "请求必须包含JSON数据"}), 400
             
-        # 获取查询参数中的文件名
+        # 获取查询参数中的文件名和DXF文件名
         filename = request.args.get('filename', 'output.xlsx')
+        dxf_filename = request.args.get('dxf_filename')
         
         # 确保文件名以.xlsx结尾
         if not filename.endswith('.xlsx'):
             filename += '.xlsx'
             
         # 调用转换函数
-        file_path = save_json_to_excel(json_data, filename)
+        file_path = save_json_to_excel(json_data, filename, dxf_filename)
         
         # 返回文件下载
         return send_file(file_path, as_attachment=True, download_name=filename)
@@ -126,6 +173,11 @@ def save_structured_data():
         required: false
         default: structured_data.xlsx
         description: 输出的Excel文件名
+      - name: dxf_filename
+        in: query
+        type: string
+        required: false
+        description: DXF文件名，将填入Excel前三行合并单元格
     responses:
       200:
         description: 成功保存Excel文件
@@ -147,8 +199,9 @@ def save_structured_data():
         else:
             structured_data = request_data
             
-        # 获取查询参数中的文件名
+        # 获取查询参数中的文件名和DXF文件名
         filename = request.args.get('filename')
+        dxf_filename = request.args.get('dxf_filename')
         if not filename:
             # 如果没有指定文件名，使用默认命名规则
             filename = 'structured_data.xlsx'
@@ -158,7 +211,7 @@ def save_structured_data():
             filename += '.xlsx'
             
         # 调用转换函数
-        file_path = save_json_to_excel(structured_data, filename)
+        file_path = save_json_to_excel(structured_data, filename, dxf_filename)
         
         # 返回成功信息
         return jsonify({
@@ -170,6 +223,7 @@ def save_structured_data():
     except Exception as e:
         logger.error(f"处理请求时出错: {str(e)}")
         return jsonify({"error": f"处理过程中出错: {str(e)}"}), 500
+
 @app.route('/json_file_to_excel', methods=['GET'])
 def convert_json_file_to_excel():
     """
@@ -188,6 +242,11 @@ def convert_json_file_to_excel():
         required: false
         default: output.xlsx
         description: 输出的Excel文件名
+      - name: dxf_filename
+        in: query
+        type: string
+        required: false
+        description: DXF文件名，将填入Excel前三行合并单元格
     responses:
       200:
         description: 成功生成Excel文件
@@ -207,6 +266,7 @@ def convert_json_file_to_excel():
         # 获取查询参数
         filepath = request.args.get('filepath')
         filename = request.args.get('filename', 'output.xlsx')
+        dxf_filename = request.args.get('dxf_filename')
         
         # 检查必要参数
         if not filepath:
@@ -230,7 +290,7 @@ def convert_json_file_to_excel():
             return jsonify({"error": f"读取文件时出错: {str(e)}"}), 500
             
         # 调用转换函数
-        file_path = save_json_to_excel(json_data, filename)
+        file_path = save_json_to_excel(json_data, filename, dxf_filename)
         
         # 返回文件下载
         return send_file(file_path, as_attachment=True, download_name=filename)
@@ -238,6 +298,7 @@ def convert_json_file_to_excel():
     except Exception as e:
         logger.error(f"处理请求时出错: {str(e)}")
         return jsonify({"error": f"处理过程中出错: {str(e)}"}), 500
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """
@@ -333,6 +394,7 @@ def _calculate_item_weight_or_length(item):
     except Exception as e:
         logger.warning(f"计算单项钢材数据时出错: {str(e)}, 项目数据: {item}")
         # 不中断整个处理过程，继续处理其他项目
+
 @app.route('/calculate_steel_data', methods=['POST'])
 def calculate_steel_data_endpoint():
     """
@@ -389,6 +451,11 @@ def calculate_and_save_steel_data():
         required: false
         default: steel_data.xlsx
         description: 输出的Excel文件名
+      - name: dxf_filename
+        in: query
+        type: string
+        required: false
+        description: DXF文件名，将填入Excel前三行合并单元格
     responses:
       200:
         description: 成功保存Excel文件
@@ -404,8 +471,9 @@ def calculate_and_save_steel_data():
         else:
             return jsonify({"error": "请求必须包含JSON数据"}), 400
             
-        # 获取查询参数中的文件名
+        # 获取查询参数中的文件名和DXF文件名
         filename = request.args.get('filename')
+        dxf_filename = request.args.get('dxf_filename')
         if not filename:
             filename = 'steel_data.xlsx'
         
@@ -417,7 +485,7 @@ def calculate_and_save_steel_data():
         calculated_data = calculate_steel_weights_and_lengths(request_data)
         
         # 保存为Excel文件
-        file_path = save_json_to_excel(calculated_data, filename)
+        file_path = save_json_to_excel(calculated_data, filename, dxf_filename)
         
         # 返回文件下载
         return send_file(file_path, as_attachment=True, download_name=filename)
@@ -425,7 +493,7 @@ def calculate_and_save_steel_data():
     except Exception as e:
         logger.error(f"处理钢材计算和保存请求时出错: {str(e)}")
         return jsonify({"error": f"处理过程中出错: {str(e)}"}), 500
+
 if __name__ == "__main__":
     # 在5005端口运行服务
     app.run(host='0.0.0.0', port=5005, debug=True)
-

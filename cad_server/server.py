@@ -715,7 +715,49 @@ def get_all_texts():
     finally:
         pythoncom.CoUninitialize()
 
-
+@app.route('/document/name', methods=['GET'])
+def get_document_name():
+    """
+    获取当前AutoCAD文档的文件名
+    
+    Returns:
+        JSON格式的文档文件名信息
+    """
+    try:
+        pythoncom.CoInitialize()
+        acad = Autocad()
+        
+        # 检查是否存在活动文档
+        try:
+            doc = acad.doc
+            if doc is None:
+                return jsonify({
+                    'status': 'error',
+                    'message': '没有打开的AutoCAD文档'
+                }), 400
+        except:
+            return jsonify({
+                'status': 'error',
+                'message': '无法连接到AutoCAD文档'
+            }), 400
+        
+        # 获取文档名称
+        doc_name = doc.Name
+        doc_path = doc.FullName
+        
+        return jsonify({
+            'status': 'success',
+            'document_name': doc_name,
+            'full_path': doc_path
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        pythoncom.CoUninitialize()
 
 @app.route('/', methods=['GET'])
 def home():

@@ -175,6 +175,20 @@ def extract_parts():
         saved_calculated_excel_path = None
         if calculated_data:
             try:
+                # 获取AutoCAD文档名称
+                doc_name = None
+                try:
+                    doc_name_response = requests.get(f"{cad_server_url}/document/name")
+                    if doc_name_response.status_code == 200:
+                        doc_name_data = doc_name_response.json()
+                        if doc_name_data.get('status') == 'success':
+                            doc_name = doc_name_data.get('document_name')
+                            # 移除文件扩展名
+                            if doc_name and '.' in doc_name:
+                                doc_name = ".".join(doc_name.split('.')[:-1])
+                except Exception as doc_name_err:
+                    logger.warning(f"获取AutoCAD文档名称时出错: {str(doc_name_err)}")
+                
                 # 构造保存的文件名
                 calculated_excel_filename = "output/calculated_data.xlsx"
                 # 在实际使用前确保目录存在
@@ -182,7 +196,10 @@ def extract_parts():
                 
                 # 保存带有计算结果的数据为Excel文件
                 json_to_excel_url = "http://localhost:5005/save_structured_data"
-                calculated_excel_params = {"filename": calculated_excel_filename}
+                calculated_excel_params = {
+                    "filename": calculated_excel_filename,
+                    "dxf_filename": doc_name  # 传递文档名作为dxf_filename参数
+                }
                 calculated_excel_payload = {"structured_data": calculated_data}
                 
                 calculated_excel_response = requests.post(
@@ -228,4 +245,4 @@ def health_check():
 if __name__ == "__main__":
     # 确保output目录存在
     os.makedirs('output', exist_ok=True)
-    app.run(host='0.0.0.0', port=5303, debug=True)
+    app.run(host='0.0.0.0', port=5304, debug=True)
