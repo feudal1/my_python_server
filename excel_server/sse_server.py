@@ -1,88 +1,45 @@
 # e:\code\my_python_server\sse\sse_server.py
-from mcp import ClientSession
-from mcp.client.sse import sse_client
 import asyncio
 from flask import Flask, request, jsonify
+from openpyxl import load_workbook
+import os
 
 app = Flask(__name__)
 
-async def read_excel_data(filepath, sheet_name=None):
-    """通过 SSE 连接到 MCP 服务器并读取 Excel 数据"""
-    url = "http://localhost:8017/sse"
-    
-    async with sse_client(url) as (read, write):
-        async with ClientSession(read, write) as session:
-            # 初始化连接
-            await session.initialize()
-            print("已连接到 MCP 服务器")
-            
-            # 处理 sheet_name 参数
-            # 如果没有提供 sheet_name，则使用默认值 "Sheet1"
-            if sheet_name is None:
-                sheet_name = "Sheet1"
-            
-            # 读取数据
-            result = await session.call_tool(
-                "read_data_from_excel",
-                arguments={
-                    "filepath": filepath,
-                    "sheet_name": sheet_name,
-                    "start_cell": "A1",
-                    "preview_only": True
-                }
-            )
-            print("已读取数据：", result)
-            # 将结果转换为可序列化的格式
-            return convert_result_to_serializable(result)
-
-def convert_result_to_serializable(result):
-    """将 CallToolResult 转换为可序列化的字典格式，并避免重复内容"""
-    if hasattr(result, '__dict__'):
-        # 如果结果对象有 __dict__ 属性，尝试转换其属性
-        serializable = {}
-        for key, value in result.__dict__.items():
-            if isinstance(value, (str, int, float, bool, type(None))):
-                serializable[key] = value
-            elif isinstance(value, (list, tuple)):
-                serializable[key] = [convert_result_to_serializable(item) if hasattr(item, '__dict__') else item for item in value]
-            elif isinstance(value, dict):
-                serializable[key] = {k: convert_result_to_serializable(v) if hasattr(v, '__dict__') else v for k, v in value.items()}
-            else:
-                # 对于其他对象，转换为字符串表示
-                serializable[key] = str(value)
+def read_excel_data(filepath, sheet_name=None):
+    """直接读取 Excel 数据，不使用 MCP"""
+    try:
+        # 检查文件是否存在
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"文件不存在: {filepath}")
         
-        # 特殊处理 content 和 structuredContent 字段，避免重复数据
-        if 'content' in serializable and 'structuredContent' in serializable:
-            # 如果 structuredContent 中的 result 与 content 的 text 相同，则移除其中一个
-            if (isinstance(serializable['content'], list) and 
-                len(serializable['content']) > 0 and
-                isinstance(serializable['content'][0], dict) and
-                'text' in serializable['content'][0] and
-                isinstance(serializable['structuredContent'], dict) and
-                'result' in serializable['structuredContent']):
-                
-                # 比较内容是否重复
-                if serializable['content'][0]['text'] == serializable['structuredContent']['result']:
-                    # 移除重复的 structuredContent，只保留 content
-                    del serializable['structuredContent']
+        # 加载工作簿
+        workbook = load_workbook(filepath, data_only=True)
         
-        return serializable
-    else:
-        return str(result)
+        # 处理 sheet_name 参数
+        if sheet_name is None:
+            worksheet = workbook.active
+        else:
+            if sheet_name not in workbook.sheetnames:
+                raise ValueError(f"工作表不存在: {sheet_name}")
+            worksheet = workbook[sheet_name]
+        
+        # 读取所有数据
+        data = [list(row) for row in worksheet.iter_rows(values_only=True)]
+        
+        # 获取列标题
+        headers = [cell.value for cell in worksheet[1]]
+        
+        return {
+            "headers": headers,
+            "data": data,
+            "sheet_name": worksheet.title,
+            "total_rows": worksheet.max_row,
+            "total_columns": worksheet.max_column
+        }
+    except Exception as e:
+        raise Exception(f"读取Excel文件时出错: {str(e)}")
 
-async def list_available_tools():
-    """通过 SSE 连接到 MCP 服务器并列出所有可用工具"""
-    url = "http://localhost:8017/sse"
-    
-    async with sse_client(url) as (read, write):
-        async with ClientSession(read, write) as session:
-            # 初始化连接
-            await session.initialize()
-            print("已连接到 MCP 服务器")
-            
-            # 列出所有可用工具
-            tools = await session.list_tools()
-            return [{"name": tool.name, "description": tool.description} for tool in tools.tools]
 
 @app.route('/read_excel', methods=['GET'])
 def read_excel_endpoint():
@@ -94,22 +51,34 @@ def read_excel_endpoint():
         return jsonify({"error": "缺少 filepath 参数"}), 400
     
     try:
-        # 在异步环境中运行
-        result = asyncio.run(read_excel_data(filepath, sheet_name))
+        result = read_excel_data(filepath, sheet_name)
         return jsonify({"result": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/list_tools', methods=['GET'])
-def list_tools_endpoint():
-    """Flask 路由，列出所有可用的 MCP 工具"""
-    try:
-        # 在异步环境中运行
-        tools = asyncio.run(list_available_tools())
-        return jsonify({"tools": tools})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@app.route('/routes')
+def show_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule),
+            'description': docstring
+        })
+    return {'routes': routes}
 
+import argparse
+
+# 解析命令行参数
+parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+args = parser.parse_args()
+
+# 使用指定的端口运行 Flask 应用
 if __name__ == '__main__':
-   
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=args.port, debug=True)

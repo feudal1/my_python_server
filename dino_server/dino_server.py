@@ -179,17 +179,29 @@ def image_info():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        "message": "DINO图像处理服务已启动",
-        "endpoints": {
-            "process_image": "GET /process_image?image_path=<path_to_image> (处理单张图像并返回特征可视化)",
-            "calculate_similarity": "GET /calculate_similarity?image1_path=<path1>&image2_path=<path2> (计算两张图像的特征相似度)",
-            "image_info": "GET /image_info?image_path=<path_to_image> (获取图像特征信息)"
-        },
-        "supported_formats": ["jpg", "jpeg", "png", "bmp", "webp"],
-        "example": "GET /process_image?image_path=http://example.com/image.jpg"
-    })
+@app.route('/routes')
+def show_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule),
+            'description': docstring
+        })
+    return {'routes': routes}
+
+import argparse
+
+# 解析命令行参数
+parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+args = parser.parse_args()
+
+# 使用指定的端口运行 Flask 应用
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5200, debug=True)
+    app.run(host='0.0.0.0', port=args.port, debug=True)

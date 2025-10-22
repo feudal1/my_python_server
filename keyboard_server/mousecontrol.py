@@ -165,37 +165,29 @@ def take_screenshot():
             "message": f"截图失败: {str(e)}"
         }), 500
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """
-    健康检查接口
-    """
-    logger.info("健康检查请求")
-    return jsonify({
-        "status": "healthy",
-        "message": "鼠标控制服务运行正常"
-    })
+@app.route('/routes')
+def show_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule),
+            'description': docstring
+        })
+    return {'routes': routes}
 
-@app.route('/', methods=['GET'])
-def index():
-    """
-    根路径，返回API说明
-    """
-    logger.info("根路径访问")
-    return jsonify({
-        "message": "鼠标控制API服务",
-        "endpoints": {
-            "POST /click": "执行鼠标点击操作",
-            "GET /position": "获取当前鼠标位置",
-            "POST /move": "移动鼠标到指定位置",
-            "GET /screenshot": "截取屏幕截图",
-            "GET /health": "健康检查"
-        },
-        "port": 5002
-    })
+import argparse
 
+# 解析命令行参数
+parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+args = parser.parse_args()
+
+# 使用指定的端口运行 Flask 应用
 if __name__ == '__main__':
-    logger.info("启动鼠标控制API服务...")
-    logger.info("访问端口: 5002")
-    logger.info("请确保以管理员权限运行此程序")
-    app.run(host='0.0.0.0', port=5002, debug=False,use_reloader=False)
+    app.run(host='0.0.0.0', port=args.port, debug=True)

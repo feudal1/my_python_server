@@ -499,6 +499,29 @@ def calculate_and_save_steel_data():
         logger.error(f"处理钢材计算和保存请求时出错: {str(e)}")
         return jsonify({"error": f"处理过程中出错: {str(e)}"}), 500
 
-if __name__ == "__main__":
-    # 在5005端口运行服务
-    app.run(host='0.0.0.0', port=5005, debug=True)
+@app.route('/routes')
+def show_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule),
+            'description': docstring
+        })
+    return {'routes': routes}
+
+import argparse
+
+# 解析命令行参数
+parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+args = parser.parse_args()
+
+# 使用指定的端口运行 Flask 应用
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=args.port, debug=True)

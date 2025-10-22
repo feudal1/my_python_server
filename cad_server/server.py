@@ -759,32 +759,29 @@ def get_document_name():
     finally:
         pythoncom.CoUninitialize()
 
-@app.route('/', methods=['GET'])
-def home():
-    """
-    API根路径，返回API服务器信息和可用端点列表
-    
-    Returns:
-        JSON格式的API信息
-    """
-    return jsonify({
-        'status': 'success',
-        'message': 'AutoCAD Server API is running',
-        'version': '1.0.0',
-        'available_endpoints': [
-            'GET / - API根路径',
-            'GET /objects/all - 获取所有对象类名',
-            'GET /objects/perimeters - 获取选中对象的周长信息',
-            'GET /objects/texts - 获取所有文本对象信息',
-            'GET /model/bounds - 获取模型空间边界框',
-            'GET /screenshot/region - 截取AutoCAD指定区域截图',
-            'GET /screenshot/region/base64 - 截取AutoCAD指定区域截图并返回base64编码',
-            'GET /delete-area - 删除指定区域内的对象',
-            'GET /edit/undo - 执行撤销操作',
-            'GET/POST /command/echo - 在AutoCAD命令行显示文本信息'
-        ],
-        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-    })
+@app.route('/routes')
+def show_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule),
+            'description': docstring
+        })
+    return {'routes': routes}
+
+import argparse
+
+# 解析命令行参数
+parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+args = parser.parse_args()
+
+# 使用指定的端口运行 Flask 应用
 if __name__ == '__main__':
-    # 启动Flask服务器，默认端口5300
-    app.run(host='0.0.0.0', port=5300, debug=True)
+    app.run(host='0.0.0.0', port=args.port, debug=True)

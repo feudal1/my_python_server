@@ -909,22 +909,29 @@ def copy_entities_with_offset(source_msp, target_msp, offset_x, offset_y):
             logger.info(f"复制实体时出错: {e}")
             continue
 
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        "message": "DXF/DWG基础处理服务已启动",
-        "endpoints": {
-            "get_texts": "GET /objects/texts?dxf_path=<path_to_dxf_or_dwg_file>",
-            "list_dxf_files": "GET /list_dxf_files?folder_path=<path_to_folder>",
-            "render_dxf_image": "GET /render_dxf_image?dxf_path=<path_to_dxf_or_dwg_file>",
-            "image": "GET /image?path=<path_to_image>",
-            "break_all_blocks":"GET /objects/break_all_blocks?dxf_path=<path_to_dxf_or_dwg_file>",
-            "/merge_dxf_files":"GET /merge_dxf_files?folder_path=/path/to/dxf/files"
+@app.route('/routes')
+def show_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule),
+            'description': docstring
+        })
+    return {'routes': routes}
 
-        },
-        "notes": "支持DXF和DWG文件格式。DWG文件会自动转换为DXF格式后再处理。"
-    })
+import argparse
 
+# 解析命令行参数
+parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+args = parser.parse_args()
 
+# 使用指定的端口运行 Flask 应用
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5303, debug=True)
+    app.run(host='0.0.0.0', port=args.port, debug=True)

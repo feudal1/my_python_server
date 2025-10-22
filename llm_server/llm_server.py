@@ -13,10 +13,11 @@ from io import BytesIO
 from PIL import Image
 import requests
 
-# 解析命令行参数
+# 解析命令行参数 (只保留一个argparse实例)
 parser = argparse.ArgumentParser()
+parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
 parser.add_argument('--log-file', help='日志文件路径')
-args = parser.parse_args()
+args, unknown = parser.parse_known_args()
 
 # 配置日志
 if args.log_file:
@@ -328,25 +329,29 @@ def health_check():
         }
     })
 
-@app.route('/', methods=['GET'])
-def index():
+@app.route('/routes')
+def show_routes():
     """
-    根路径，返回API说明
+    显示所有可用路由
     """
-    logger.info("根路径访问")
-    return jsonify({
-        "message": "LLM/VLM API服务",
-        "endpoints": {
-            "POST /chat": "与LLM进行对话",
-            "POST /vlm/chat": 'Server URL: http://localhost:5003/vlm/chat?messages=[{"role":"user","content":"描述图片"}]&image_source=/path/to/local/image.jpg',
-            "GET /health": "健康检查"
-        },
-        "port": 5003
-    })
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # 获取端点函数的docstring
+        endpoint_func = app.view_functions.get(rule.endpoint)
+        docstring = endpoint_func.__doc__.strip() if endpoint_func and endpoint_func.__doc__ else "无描述"
+        
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': sorted(list(rule.methods - {'HEAD'})),  # 排除HEAD方法
+            'rule': str(rule),
+            'description': docstring
+        })
+    
+    # 按路由规则排序
+    routes.sort(key=lambda x: x['rule'])
+    
+    return jsonify({'routes': routes})
 
-if __name__ == "__main__":
-    # 确保output目录存在
-    os.makedirs('output', exist_ok=True)
-    logger.info("启动LLM/VLM API服务...")
-    logger.info("访问端口: 5003")
-    app.run(host='0.0.0.0', port=5003, debug=False, use_reloader=False)
+# 使用指定的端口运行 Flask 应用 (移除重复的argparse)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=args.port, debug=True)

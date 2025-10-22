@@ -125,3 +125,46 @@
 2025-10-22 13:38:57,950 - ezdxf - INFO - did not write header var $INTERFEREOBJVS, value is None.
 2025-10-22 13:38:57,951 - ezdxf - INFO - did not write header var $INTERFEREVPVS, value is None.
 2025-10-22 13:38:57,999 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 13:38:57] "GET /merge_dxf_files?folder_path=F:\\陈启鸿\\三宝\\10.7\\20厘 HTTP/1.1" 200 -
+2025-10-22 17:06:50,380 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:06:50,381 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:06:50,382 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:06:51,388 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:06:51,390 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:09:43,535 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:09:43,536 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:09:43,537 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:09:44,394 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:09:44,396 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:10:07,756 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:10:07] "GET /routes HTTP/1.1" 200 -
+2025-10-22 17:15:39,066 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:15:39,066 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:15:39,067 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:15:40,042 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:15:40,045 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:16:03,159 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:16:03] "GET /routes HTTP/1.1" 200 -
+2025-10-22 17:17:23,805 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:17:23,805 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:17:23,806 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:17:24,731 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:17:24,735 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:17:47,888 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:17:47] "GET /routes HTTP/1.1" 200 -
+2025-10-22 17:19:03,626 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:19:03,626 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:19:03,627 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:19:04,529 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:19:04,531 - werkzeug - INFO -  * Debugger PIN: 953-550-840
