@@ -35,13 +35,14 @@ def tail_file(log_path, name):
             print(f"读取日志文件 {log_path} 时出错: {str(e)}")
             time.sleep(1)
 
-def select_servers(excel_servers, cad_servers, dino_servers):
+def select_servers(excel_servers, cad_servers, dino_servers,llm_servers):
     '''让用户选择要启动的服务器'''
     print("请选择要启动的服务器:")
     print("1. Excel Servers (默认)")
     print("2. CAD Servers")
     print("3. DINO Servers")
-    print("4. 所有服务器")
+    print("4. llm Servers")
+    print("5. 所有服务器")
     
     choice = input("请输入选项编号 (默认为1): ").strip()
     
@@ -52,11 +53,13 @@ def select_servers(excel_servers, cad_servers, dino_servers):
         print("Server URL: http://localhost:5301/view_dxf?dxf_path=")
         return cad_servers
     elif choice == "3":
-        print("Server URL: http://localhost:5200/image_info?image_path=")
+        print("Server URL: http://localhost:5200/process_image?image_path=")
         return dino_servers
-    
     elif choice == "4":
-        return excel_servers + cad_servers + dino_servers
+        print('Server URL: http://localhost:5003/vlm/chat?messages=[{"role":"user","content":"描述图片"}]&image_source=/path/to/local/image.jpg')
+        return llm_servers
+    elif choice == "5":
+        return excel_servers + cad_servers + dino_servers+ llm_servers
     else:
         print("无效选项，使用默认的Excel Servers")
         return excel_servers
@@ -139,9 +142,17 @@ def start_servers():
             "log_file": "logs/dino_server.log"
         }
     ]
+    llm_servers = [
+         {
+            "name": "LLM Server",
+            "command": "micromambavenv\\python llm_server\llm_server.py",
+            "cwd": "E:\\code\\my_python_server",
+            "log_file": "logs/llm.log"
+        }
+    ]
     
     # 让用户选择要启动的服务器
-    start_servers_list = select_servers(excel_servers, cad_servers, dino_servers)
+    start_servers_list = select_servers(excel_servers, cad_servers, dino_servers, llm_servers)
     
     processes = []
     

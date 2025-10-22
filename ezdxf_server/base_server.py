@@ -1,4 +1,3 @@
-# base_server.py
 import ezdxf
 import numpy as np
 import matplotlib
@@ -16,8 +15,23 @@ import json
 from datetime import datetime
 from functools import wraps
 import math
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('dxf_server.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
 SHOW_TIMING = True
 app = Flask(__name__)
+
 
 # ==================== 配置 matplotlib 支持中文 ====================
 matplotlib.rcParams['font.family'] = 'SimHei'  # Windows 中文支持
@@ -72,7 +86,7 @@ def convert_dwg_to_dxf(dwg_file_path):
             INPUTFILTER
         ]
 
-        print(f"执行命令: {' '.join(cmd)}")
+        logger.info(f"执行命令: {' '.join(cmd)}")
 
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
 
@@ -135,7 +149,7 @@ def is_valid_dxf(dxf_path):
         doc = ezdxf.readfile(dxf_path)
         return True
     except Exception as e:
-        print(f"DXF文件校验失败: {e}")
+        logger.info(f"DXF文件校验失败: {e}")
         return False
 
 
@@ -378,7 +392,7 @@ def process_dxf_file_simple(dxf_file_path):
                     all_y_coords.extend(y_coords)
                     processed_entities += 1
                 except Exception as e:
-                    print(f'处理SPLINE实体时出错: {e}')
+                    logger.info(f'处理SPLINE实体时出错: {e}')
 
             elif entity.dxftype() == 'ARC':
                 center = entity.dxf.center
@@ -420,7 +434,7 @@ def process_dxf_file_simple(dxf_file_path):
             elif entity.dxftype() == 'MTEXT':
                 insert = entity.dxf.insert
                 text = entity.text
-                height = entity.dxf.height if hasattr(entity.dxf, 'height') else 0.5
+                height = entity.dxf.char_height if hasattr(entity.dxf, 'char_height') else 0.5
                 # 使用原始高度，但根据图像整体尺寸适度调整
                 font_size = height * 0.3  # 保持原始比例，调整倍数使显示效果更好
                 ax.text(insert.x, insert.y, text, color=color, fontsize=font_size)
@@ -528,7 +542,7 @@ def break_all_blocks():
                 blocks_broken += 1
                 exploded_entities += len(exploded)
             except Exception as e:
-                print(f"分解块 '{insert.dxf.name}' 时出错: {e}")
+                logger.info(f"分解块 '{insert.dxf.name}' 时出错: {e}")
 
         # 保存修改后的DXF文件
         output_dir = "dxf_output/broken"
@@ -603,7 +617,297 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+def explode_all_blocks(msp):
+    """
+    递归分解模型空间中的所有块引用和多段线
+    
+    Args:
+        msp: 模型空间对象
+        
+    Returns:
+        tuple: (分解的块数量, 分解出的实体数量)
+    """
+    blocks_broken = 0
+    exploded_entities = 0
+    
+    # 多次遍历直到没有更多的INSERT实体和可分解的多段线
+    while True:
+        # 收集所有需要分解的实体（INSERT和多段线）
+        inserts = [entity for entity in msp if entity.dxftype() == 'INSERT']
+        polylines = [entity for entity in msp if entity.dxftype() in ['POLYLINE', 'LWPOLYLINE']]
+        
+        # 如果没有需要分解的实体，则退出循环
+        if not inserts and not polylines:
+            break
+            
+        # 分解所有块引用
+        for insert in inserts:
+            try:
+                exploded = insert.explode()
+                blocks_broken += 1
+                exploded_entities += len(exploded)
+                logger.info(f"分解块 '{insert.dxf.name}'，获得 {len(exploded)} 个实体")
+            except Exception as e:
+                logger.info(f"分解块 '{insert.dxf.name}' 时出错: {e}")
+                
+        # 分解所有多段线
+        for polyline in polylines:
+            try:
+                exploded = polyline.explode()
+                blocks_broken += 1
+                exploded_entities += len(exploded)
+                logger.info(f"分解多段线，获得 {len(exploded)} 个实体")
+            except Exception as e:
+                logger.info(f"分解多段线时出错: {e}")
+                
+    return blocks_broken, exploded_entities
+@app.route('/merge_dxf_files', methods=['GET'])
+def merge_dxf_files():
+    """
+    合并文件夹内所有DXF文件到一个DXF文件中，按文件名顺序排列，并在合并前分解所有块
+    
+    参数:
+    - folder_path: 包含DXF文件的文件夹路径
+    - output_name (可选): 输出文件名，默认为 merged_dxf.dxf
+    
+    返回:
+    - status: 状态(success/error)
+    - message: 处理结果消息
+    - output_path: 合并后的DXF文件路径
+    - file_count: 合并的文件数量
+    """
+    start_time = time.time()
+    folder_path = request.args.get('folder_path')
+    output_name = request.args.get('output_name', 'merged_dxf.dxf')
+    
+    if not folder_path:
+        response = {"status": "error", "message": "缺少folder_path参数"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 400
 
+    if not os.path.exists(folder_path):
+        response = {"status": "error", "message": f"路径不存在: {folder_path}"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 404
+
+    if not os.path.isdir(folder_path):
+        response = {"status": "error", "message": f"指定路径不是文件夹: {folder_path}"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 400
+
+    try:
+        # 获取所有DXF文件并排序
+        all_files = os.listdir(folder_path)
+        dxf_files = sorted([f for f in all_files if f.lower().endswith('.dxf')])
+        
+        if not dxf_files:
+            response = {"status": "error", "message": "文件夹中没有找到DXF文件"}
+            if SHOW_TIMING:
+                response["processing_time"] = time.time() - start_time
+            return jsonify(response), 404
+            
+        # 创建新的DXF文档
+        doc = ezdxf.new()
+        msp = doc.modelspace()
+        
+        # 初始化偏移量
+        current_offset_y = 0
+        max_height = 0
+        merged_count = 0
+        
+        # 在 merge_dxf_files 中
+        for filename in dxf_files:
+            try:
+                file_path = os.path.join(folder_path, filename)
+                source_doc = ezdxf.readfile(file_path)
+                source_msp = source_doc.modelspace()
+
+                # 分解块
+                blocks_broken, exploded_entities = explode_all_blocks(source_msp)
+                if blocks_broken > 0:
+                    source_msp = source_doc.modelspace()  # 重新获取分解后的实体
+
+                # 计算边界框
+                extents = calculate_dxf_extents(source_msp)
+                if not extents:
+                    continue
+                min_x, min_y, max_x, max_y = extents
+
+                # 设置偏移（左对齐，竖直堆叠）
+                if merged_count == 0:
+                    offset_x = -min_x
+                    offset_y = -min_y
+                else:
+                    offset_x = -min_x
+                    offset_y = current_offset_y - min_y
+
+                # 复制实体
+                copy_entities_with_offset(source_msp, msp, offset_x, offset_y)
+
+                # 更新下一个文件的起始位置
+                current_offset_y += max_y - min_y + 10  # 加间距
+
+                merged_count += 1
+            except Exception as e:
+                logger.error(f"处理文件 {filename} 时出错: {e}")
+                continue
+        
+        # 保存合并后的DXF文件
+        output_dir = "dxf_output/merged"
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_name)
+        doc.saveas(output_path)
+        
+        response = {
+            "status": "success",
+            "message": f"成功合并 {merged_count} 个DXF文件（已分解块）",
+            "output_path": output_path,
+            "file_count": merged_count,
+            "merged_files": dxf_files
+        }
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response)
+        
+    except PermissionError:
+        response = {"status": "error", "message": f"没有权限访问文件夹: {folder_path}"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 403
+    except Exception as e:
+        response = {"status": "error", "message": f"合并文件时出错: {str(e)}"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 500
+
+def calculate_dxf_extents(msp):
+    """
+    计算模型空间中所有实体的边界框
+    
+    Args:
+        msp: 模型空间对象
+        
+    Returns:
+        tuple: (min_x, min_y, max_x, max_y) 或 None(如果没有实体)
+    """
+    all_x_coords = []
+    all_y_coords = []
+    
+    for entity in msp:
+        try:
+            if entity.dxftype() == 'LINE':
+                start = entity.dxf.start
+                end = entity.dxf.end
+                all_x_coords.extend([start.x, end.x])
+                all_y_coords.extend([start.y, end.y])
+                
+            elif entity.dxftype() == 'CIRCLE':
+                center = entity.dxf.center
+                radius = entity.dxf.radius
+                all_x_coords.extend([center.x - radius, center.x + radius])
+                all_y_coords.extend([center.y - radius, center.y + radius])
+                
+            elif entity.dxftype() == 'ARC':
+                center = entity.dxf.center
+                radius = entity.dxf.radius
+                all_x_coords.extend([center.x - radius, center.x + radius])
+                all_y_coords.extend([center.y - radius, center.y + radius])
+                
+            elif entity.dxftype() in ['TEXT', 'MTEXT']:
+                insert = entity.dxf.insert
+                all_x_coords.append(insert.x)
+                all_y_coords.append(insert.y)
+                
+            elif entity.dxftype() == 'SPLINE':
+                if hasattr(entity, 'fit_points') and entity.fit_points:
+                    points = [(p.x, p.y) for p in entity.fit_points]
+                elif hasattr(entity, 'control_points'):
+                    points = [(p[0], p[1]) for p in entity.control_points]
+                else:
+                    continue
+                    
+                x_coords = [p[0] for p in points]
+                y_coords = [p[1] for p in points]
+                all_x_coords.extend(x_coords)
+                all_y_coords.extend(y_coords)
+                
+        except Exception as e:
+            logger.info(f"计算实体边界时出错: {e}")
+            continue
+    
+    if not all_x_coords or not all_y_coords:
+        return None
+        
+    return (min(all_x_coords), min(all_y_coords), max(all_x_coords), max(all_y_coords))
+
+
+def copy_entities_with_offset(source_msp, target_msp, offset_x, offset_y):
+    """
+    将源模型空间中的实体复制到目标模型空间，并应用偏移
+    
+    Args:
+        source_msp: 源模型空间
+        target_msp: 目标模型空间
+        offset_x: X轴偏移量
+        offset_y: Y轴偏移量
+    """
+    for entity in source_msp:
+        try:
+            if entity.dxftype() == 'LINE':
+                start = entity.dxf.start
+                end = entity.dxf.end
+                target_msp.add_line(
+                    (start.x + offset_x, start.y + offset_y),
+                    (end.x + offset_x, end.y + offset_y),
+                    dxfattribs={'color': entity.dxf.color}
+                )
+                
+            elif entity.dxftype() == 'CIRCLE':
+                center = entity.dxf.center
+                target_msp.add_circle(
+                    (center.x + offset_x, center.y + offset_y),
+                    entity.dxf.radius,
+                    dxfattribs={'color': entity.dxf.color}
+                )
+                
+            elif entity.dxftype() == 'ARC':
+                center = entity.dxf.center
+                target_msp.add_arc(
+                    (center.x + offset_x, center.y + offset_y),
+                    entity.dxf.radius,
+                    entity.dxf.start_angle,
+                    entity.dxf.end_angle,
+                    dxfattribs={'color': entity.dxf.color}
+                )
+                
+            elif entity.dxftype() == 'TEXT':
+                insert = entity.dxf.insert
+                target_msp.add_text(
+                    entity.dxf.text,
+                    dxfattribs={
+                        'insert': (insert.x + offset_x, insert.y + offset_y),
+                        'height': entity.dxf.height,
+                        'color': entity.dxf.color
+                    }
+                )
+                
+            elif entity.dxftype() == 'MTEXT':
+                insert = entity.dxf.insert
+                target_msp.add_mtext(
+                    entity.text,
+                    dxfattribs={
+                        'insert': (insert.x + offset_x, insert.y + offset_y),
+                        'char_height':  entity.dxf.char_height*0.7 if hasattr(entity.dxf, 'char_height') else 0.5,
+                        'color': entity.dxf.color
+                    }
+                )
+                
+        except Exception as e:
+            logger.info(f"复制实体时出错: {e}")
+            continue
 
 @app.route('/', methods=['GET'])
 def home():
@@ -614,7 +918,9 @@ def home():
             "list_dxf_files": "GET /list_dxf_files?folder_path=<path_to_folder>",
             "render_dxf_image": "GET /render_dxf_image?dxf_path=<path_to_dxf_or_dwg_file>",
             "image": "GET /image?path=<path_to_image>",
-            "break_all_blocks":"GET /objects/break_all_blocks?dxf_path=<path_to_dxf_or_dwg_file>"
+            "break_all_blocks":"GET /objects/break_all_blocks?dxf_path=<path_to_dxf_or_dwg_file>",
+            "/merge_dxf_files":"GET /merge_dxf_files?folder_path=/path/to/dxf/files"
+
         },
         "notes": "支持DXF和DWG文件格式。DWG文件会自动转换为DXF格式后再处理。"
     })
