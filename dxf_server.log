@@ -168,3 +168,31 @@
 2025-10-22 17:19:03,627 - werkzeug - INFO -  * Restarting with stat
 2025-10-22 17:19:04,529 - werkzeug - WARNING -  * Debugger is active!
 2025-10-22 17:19:04,531 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:19:27,683 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:19:27] "GET /routes HTTP/1.1" 200 -
+2025-10-22 17:20:42,974 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:20:42,974 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:20:42,975 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:20:44,044 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:20:44,046 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:21:06,986 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:21:06] "GET /routes HTTP/1.1" 200 -
+2025-10-22 17:25:28,085 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:25:28,085 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:25:28,086 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:25:29,040 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:25:29,043 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:25:52,178 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:25:52] "GET /routes HTTP/1.1" 200 -
+2025-10-22 17:47:01,469 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5302
+ * Running on http://192.168.10.205:5302
+2025-10-22 17:47:01,469 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-22 17:47:01,470 - werkzeug - INFO -  * Restarting with stat
+2025-10-22 17:47:02,454 - werkzeug - WARNING -  * Debugger is active!
+2025-10-22 17:47:02,458 - werkzeug - INFO -  * Debugger PIN: 953-550-840
+2025-10-22 17:47:25,487 - werkzeug - INFO - 127.0.0.1 - - [22/Oct/2025 17:47:25] "GET /routes HTTP/1.1" 200 -

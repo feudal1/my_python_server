@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 import requests
 import json
-
+import re
 # 统一端口配置
 PORT_CONFIG = {
     # Excel 相关服务端口 (5000-5099)
@@ -85,8 +85,40 @@ def print_service_routes(service_name, port):
             methods = ', '.join([m for m in route['methods'] if m != 'HEAD'])
             # 只显示第一行描述
             description = route['description'].split('\n')[0] if route['description'] else ''
-            print(f"   http://localhost:{port}{route['rule']} [{methods}] - {description}")
-         
+            
+            # 默认显示基本URL
+            base_url = f"http://localhost:{port}{route['rule']}"
+            
+            # 检查是否有查询参数
+            has_query_params = False
+            if 'GET' in route['methods'] and route['description']:
+                lines = route['description'].split('\n')
+                params = []
+                for line in lines:
+                    if 'name:' in line:
+                        has_query_params = True
+                        # 提取参数名
+                        param_name_match = re.search(r'name:\s*(\w+)', line)
+                        if param_name_match:
+                            param_name = param_name_match.group(1)
+                            # 检查是否有默认值
+                            default_match = re.search(r'default:\s*([^,\n]+)', line)
+                            if default_match:
+                                default_val = default_match.group(1).strip()
+                                params.append(f"{param_name}={default_val}")
+                            else:
+                                params.append(f"{param_name}=")
+                
+                # 如果找到查询参数，则构建带参数的URL示例
+                if params:
+                    query_string = '&'.join(params)
+                    print(f"http://localhost:{port}{route['rule']}?{query_string} [{methods}] - {description}")
+                else:
+                    # 有参数定义但未解析出具体参数的情况
+                    print(f"{base_url} [{methods}] - {description}")
+            else:
+                # 非GET请求或没有描述的情况
+                print(f"{base_url} [{methods}] - {description}")
     else:
         print(f"  无法获取路由信息或服务尚未启动")
     print("=" * 50)
