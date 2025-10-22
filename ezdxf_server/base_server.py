@@ -15,9 +15,14 @@ import time
 import json
 from datetime import datetime
 from functools import wraps
-
+import math
 SHOW_TIMING = True
 app = Flask(__name__)
+
+# ==================== 配置 matplotlib 支持中文 ====================
+matplotlib.rcParams['font.family'] = 'SimHei'  # Windows 中文支持
+matplotlib.rcParams['axes.unicode_minus'] = False  # 防止负号显示为方框
+
 
 def convert_dwg_to_dxf(dwg_file_path):
     """
@@ -31,14 +36,12 @@ def convert_dwg_to_dxf(dwg_file_path):
     """
     start_time = time.time()
     try:
-        # 检查DWG文件是否存在
         if not os.path.exists(dwg_file_path):
             return {
                 "status": "error",
                 "message": f"DWG文件不存在: {dwg_file_path}"
             }
 
-        # 获取文件目录和文件名
         dwg_dir = os.path.dirname(dwg_file_path)
         dwg_filename = os.path.basename(dwg_file_path)
         dxf_filename = dwg_filename.replace('.dwg', '.dxf')
@@ -46,27 +49,24 @@ def convert_dwg_to_dxf(dwg_file_path):
         if dxf_file_path == dwg_file_path:
             dxf_file_path = f"{dwg_file_path}.dxf"
 
-        # 创建输出目录（如果不存在）
         output_dir = os.path.dirname(dxf_file_path)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 参数定义（按官方规范）
         TEIGHA_PATH = "ODAFileConverter"
         INPUT_FOLDER = dwg_dir
         OUTPUT_FOLDER = output_dir
-        OUTVER = "ACAD2018"           # 输入版本（如原文件是 ACAD2018）
-        OUTFORMAT = "DXF"             # 输出格式：只能是 DXF / DWG / DXB
+        OUTVER = "ACAD2018"
+        OUTFORMAT = "DXF"
         RECURSIVE = "0"
         AUDIT = "1"
-        INPUTFILTER = "*.DWG"         # 只处理DWG文件
+        INPUTFILTER = "*.DWG"
 
-        # 构建命令（注意顺序！）
         cmd = [
             TEIGHA_PATH,
             INPUT_FOLDER,
             OUTPUT_FOLDER,
-            OUTVER,           # 输入版本
-            OUTFORMAT,        # 输出格式 ← 必须是 DXF/DWG/DXB
+            OUTVER,
+            OUTFORMAT,
             RECURSIVE,
             AUDIT,
             INPUTFILTER
@@ -74,41 +74,25 @@ def convert_dwg_to_dxf(dwg_file_path):
 
         print(f"执行命令: {' '.join(cmd)}")
 
-        # 执行转换命令
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
 
-        # 打印调试信息
-        print("ODA 输出:", result.stdout)
-        print("ODA 错误:", result.stderr)
-
         if result.returncode == 0:
-            # 检查DXF文件是否生成
-            if os.path.exists(dxf_file_path):
-                # 验证DXF文件是否有效
-                if is_valid_dxf(dxf_file_path):
-                    response = {
-                        "status": "success",
-                        "message": f"DWG文件已成功转换为DXF: {dxf_file_path}",
-                        "dxf_path": dxf_file_path
-                    }
-                    if SHOW_TIMING:
-                        response["processing_time"] = time.time() - start_time
-                    return response
-                else:
-                    response = {
-                        "status": "error",
-                        "message": f"生成的DXF文件结构不完整或损坏: {dxf_file_path}"
-                    }
-                    if SHOW_TIMING:
-                        response["processing_time"] = time.time() - start_time
-                    return response
+            if os.path.exists(dxf_file_path) and is_valid_dxf(dxf_file_path):
+                response = {
+                    "status": "success",
+                    "message": f"DWG文件已成功转换为DXF: {dxf_file_path}",
+                    "dxf_path": dxf_file_path
+                }
+                if SHOW_TIMING:
+                    response["processing_time"] = time.time() - start_time
+                return response
             else:
                 response = {
                     "status": "error",
-                    "message": f"转换完成但未生成DXF文件。请检查输出目录: {output_dir}"
+                    "message": f"生成的DXF文件无效或未创建: {dxf_file_path}"
                 }
                 if SHOW_TIMING:
-                        response["processing_time"] = time.time() - start_time
+                    response["processing_time"] = time.time() - start_time
                 return response
         else:
             response = {
@@ -130,7 +114,7 @@ def convert_dwg_to_dxf(dwg_file_path):
     except FileNotFoundError:
         response = {
             "status": "error",
-            "message": "未找到ODAFileConverter命令，请确保ODA File Converter已正确安装并加入PATH"
+            "message": "未找到ODAFileConverter命令，请确保已安装并加入PATH"
         }
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
@@ -144,6 +128,7 @@ def convert_dwg_to_dxf(dwg_file_path):
             response["processing_time"] = time.time() - start_time
         return response
 
+
 def is_valid_dxf(dxf_path):
     """检查DXF文件是否有效"""
     try:
@@ -154,38 +139,21 @@ def is_valid_dxf(dxf_path):
         return False
 
 
-
-
-
-
-
 @app.route('/objects/texts', methods=['GET'])
 def get_dxf_texts():
     """
     获取DXF/DWG文件中所有文本对象的内容
-    
-    Query Parameters:
-        dxf_path: DXF或DWG文件路径
-        
-    Returns:
-        JSON格式的文本内容列表
     """
     start_time = time.time()
     file_path = request.args.get('dxf_path')
     if not file_path:
-        response = {
-            "status": "error", 
-            "message": "缺少dxf_path参数"
-        }
+        response = {"status": "error", "message": "缺少dxf_path参数"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 400
 
     if not os.path.exists(file_path):
-        response = {
-            "status": "error", 
-            "message": f"文件不存在: {file_path}"
-        }
+        response = {"status": "error", "message": f"文件不存在: {file_path}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 404
@@ -193,7 +161,6 @@ def get_dxf_texts():
     file_ext = os.path.splitext(file_path)[1].lower()
 
     try:
-        # 如果是DWG文件，先转换为DXF
         if file_ext == '.dwg':
             conversion_result = convert_dwg_to_dxf(file_path)
             if conversion_result["status"] != "success":
@@ -204,46 +171,28 @@ def get_dxf_texts():
         elif file_ext == '.dxf':
             dxf_file_path = file_path
         else:
-            response = {
-                "status": "error",
-                "message": f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。"
-            }
+            response = {"status": "error", "message": f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。"}
             if SHOW_TIMING:
                 response["processing_time"] = time.time() - start_time
             return jsonify(response), 400
 
-        # 读取DXF文件并收集文本内容
-        doc_read_start = time.time()
         doc = ezdxf.readfile(dxf_file_path)
         msp = doc.modelspace()
-        doc_read_time = time.time() - doc_read_start
 
-        # 收集所有文本内容
-        text_collection_start = time.time()
         texts = []
         for entity in msp:
             if entity.dxftype() == 'TEXT':
                 texts.append({
                     'content': entity.dxf.text,
-                    'position': {
-                        'x': entity.dxf.insert.x,
-                        'y': entity.dxf.insert.y
-                    }
+                    'position': {'x': entity.dxf.insert.x, 'y': entity.dxf.insert.y}
                 })
             elif entity.dxftype() == 'MTEXT':
                 texts.append({
                     'content': entity.text,
-                    'position': {
-                        'x': entity.dxf.insert.x,
-                        'y': entity.dxf.insert.y
-                    }
+                    'position': {'x': entity.dxf.insert.x, 'y': entity.dxf.insert.y}
                 })
-        text_collection_time = time.time() - text_collection_start
 
-        # 将所有文本内容合并为一个字符串
-        text_merge_start = time.time()
         all_text_content = '\n'.join([text['content'] for text in texts])
-        text_merge_time = time.time() - text_merge_start
 
         response = {
             'status': 'success',
@@ -252,137 +201,81 @@ def get_dxf_texts():
             'text_count': len(texts),
             'file_path': dxf_file_path
         }
-        
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
-            response["timing_details"] = {
-                "doc_read_time": doc_read_time,
-                "text_collection_time": text_collection_time,
-                "text_merge_time": text_merge_time
-            }
-            
         return jsonify(response)
 
     except Exception as e:
-        response = {
-            'status': 'error',
-            'message': f"处理文件时出错: {str(e)}"
-        }
+        response = {"status": "error", "message": f"处理文件时出错: {str(e)}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 500
-# HTML模板
+
+
 @app.route('/list_dxf_files', methods=['GET'])
 def list_dxf_files():
     """
     获取指定文件夹内所有DXF文件的名称
-    
-    Query Parameters:
-        folder_path: 文件夹路径
-        
-    Returns:
-        JSON格式的DXF文件列表
     """
     start_time = time.time()
-    
-    # 获取请求参数
     folder_path = request.args.get('folder_path')
-    
-    # 检查是否提供了文件夹路径
     if not folder_path:
-        response = {
-            "status": "error",
-            "message": "缺少folder_path参数"
-        }
+        response = {"status": "error", "message": "缺少folder_path参数"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 400
-    
-    # 检查路径是否存在且为文件夹
+
     if not os.path.exists(folder_path):
-        response = {
-            "status": "error",
-            "message": f"路径不存在: {folder_path}"
-        }
+        response = {"status": "error", "message": f"路径不存在: {folder_path}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 404
-        
+
     if not os.path.isdir(folder_path):
-        response = {
-            "status": "error",
-            "message": f"指定路径不是文件夹: {folder_path}"
-        }
+        response = {"status": "error", "message": f"指定路径不是文件夹: {folder_path}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 400
-    
+
     try:
-        # 获取文件夹内所有文件
         all_files = os.listdir(folder_path)
-        
-        # 筛选出DXF文件（不区分大小写）
         dxf_files = [f for f in all_files if f.lower().endswith('.dxf')]
-        
         response = {
             "status": "success",
             "folder_path": folder_path,
             "dxf_files": dxf_files,
             "count": len(dxf_files)
         }
-        
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
-            
         return jsonify(response)
-        
     except PermissionError:
-        response = {
-            "status": "error",
-            "message": f"没有权限访问文件夹: {folder_path}"
-        }
+        response = {"status": "error", "message": f"没有权限访问文件夹: {folder_path}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 403
-        
     except Exception as e:
-        response = {
-            "status": "error",
-            "message": f"读取文件夹时出错: {str(e)}"
-        }
+        response = {"status": "error", "message": f"读取文件夹时出错: {str(e)}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 500
-    
 
 
 @app.route('/render_dxf_image', methods=['GET'])
 def render_dxf_image():
     """
     渲染DXF/DWG文件为图像
-    
-    Query Parameters:
-        dxf_path: DXF或DWG文件路径
-        
-    Returns:
-        JSON格式的处理结果或图像文件
     """
     start_time = time.time()
     file_path = request.args.get('dxf_path')
     if not file_path:
-        response = {
-            "status": "error", 
-            "message": "缺少dxf_path参数"
-        }
+        response = {"status": "error", "message": "缺少dxf_path参数"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 400
 
     if not os.path.exists(file_path):
-        response = {
-            "status": "error", 
-            "message": f"文件不存在: {file_path}"
-        }
+        response = {"status": "error", "message": f"文件不存在: {file_path}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 404
@@ -390,7 +283,6 @@ def render_dxf_image():
     file_ext = os.path.splitext(file_path)[1].lower()
 
     try:
-        # 如果是DWG文件，先转换为DXF
         if file_ext == '.dwg':
             conversion_result = convert_dwg_to_dxf(file_path)
             if conversion_result["status"] != "success":
@@ -401,19 +293,13 @@ def render_dxf_image():
         elif file_ext == '.dxf':
             dxf_file_path = file_path
         else:
-            response = {
-                "status": "error",
-                "message": f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。"
-            }
+            response = {"status": "error", "message": f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。"}
             if SHOW_TIMING:
                 response["processing_time"] = time.time() - start_time
             return jsonify(response), 400
 
-        # 处理DXF文件并生成图像
         result = process_dxf_file_simple(dxf_file_path)
-        
         if result["status"] == "success":
-            # 检查是否需要返回图像文件
             if request.args.get('return_image') == 'true':
                 return send_file(result["output_path"], mimetype='image/png')
             else:
@@ -424,29 +310,17 @@ def render_dxf_image():
             if SHOW_TIMING:
                 result["processing_time"] = time.time() - start_time
             return jsonify(result), 500
-
     except Exception as e:
-        response = {
-            'status': 'error',
-            'message': f"处理文件时出错: {str(e)}"
-        }
+        response = {"status": "error", "message": f"处理文件时出错: {str(e)}"}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return jsonify(response), 500
 
-
 def process_dxf_file_simple(dxf_file_path):
     """
-    处理DXF文件并生成图像（简化版，无高亮）
-    
-    Args:
-        dxf_file_path (str): DXF文件路径
-        
-    Returns:
-        dict: 处理结果
+    处理DXF文件并生成图像（支持中文、自动字体大小）
     """
     start_time = time.time()
-    # DXF颜色索引到matplotlib颜色的映射
     dxf_color_map = {
         0: 'black', 1: 'red', 2: 'yellow', 3: 'green', 4: 'cyan',
         5: 'blue', 6: 'magenta', 7: 'white', 8: '#a5a5a5', 9: '#c0c0c0',
@@ -461,128 +335,119 @@ def process_dxf_file_simple(dxf_file_path):
     }
 
     try:
-        # 检查文件是否存在
         if not os.path.exists(dxf_file_path):
-            response = {
-                "status": "error",
-                "message": f"文件不存在: {dxf_file_path}"
-            }
-            if SHOW_TIMING:
-                response["processing_time"] = time.time() - start_time
-            return response
+            return {"status": "error", "message": f"文件不存在: {dxf_file_path}"}
 
-        # 加载DXF文件
-        print(f"开始加载DXF文件: {dxf_file_path}")
         doc = ezdxf.readfile(dxf_file_path)
         msp = doc.modelspace()
-        print(f"成功加载DXF文件，包含 {len(msp)} 个实体")
 
-        # 创建图形对象
-        fig, ax = plt.subplots(figsize=(10, 10), dpi=100)
-        
+        fig, ax = plt.subplots(figsize=(12, 12), dpi=200)  # 提高分辨率
         all_x_coords = []
         all_y_coords = []
 
-        # 处理实体
-        entity_counts = {}  # 统计各类实体数量
+        entity_counts = {}
         processed_entities = 0
-        
+
         for entity in msp:
-            # 统计实体类型
             entity_type = entity.dxftype()
             entity_counts[entity_type] = entity_counts.get(entity_type, 0) + 1
-            
-            # 获取实体颜色
+
             try:
-                if hasattr(entity.dxf, 'color') and entity.dxf.color in dxf_color_map:
-                    color = dxf_color_map[entity.dxf.color]
-                else:
-                    color = dxf_color_map['default']
+                color = dxf_color_map.get(entity.dxf.color, dxf_color_map['default'])
             except:
                 color = dxf_color_map['default']
-            
+
             linewidth = 0.5
 
             if entity.dxftype() == 'LINE':
                 start = entity.dxf.start
                 end = entity.dxf.end
-                # 直接绘制所有线条，避免使用LineCollection
                 ax.plot([start.x, end.x], [start.y, end.y], color=color, linewidth=linewidth)
-                
                 all_x_coords.extend([start.x, end.x])
                 all_y_coords.extend([start.y, end.y])
                 processed_entities += 1
-                    
+
             elif entity.dxftype() == 'SPLINE':
                 try:
-                    if hasattr(entity, 'fit_points') and entity.fit_points:
-                        points = [(p.x, p.y) for p in entity.fit_points]
-                    else:
-                        points = [(p[0], p[1]) for p in entity.control_points]
-                        
+                    points = [(p.x, p.y) for p in entity.fit_points] if hasattr(entity, 'fit_points') and entity.fit_points else \
+                             [(p[0], p[1]) for p in entity.control_points]
                     x_coords = [p[0] for p in points]
                     y_coords = [p[1] for p in points]
                     ax.plot(x_coords, y_coords, color=color, linewidth=linewidth)
-                            
-                    all_x_coords.extend([p[0] for p in points])
-                    all_y_coords.extend([p[1] for p in points])
+                    all_x_coords.extend(x_coords)
+                    all_y_coords.extend(y_coords)
                     processed_entities += 1
                 except Exception as e:
                     print(f'处理SPLINE实体时出错: {e}')
-                    
+
             elif entity.dxftype() == 'ARC':
                 center = entity.dxf.center
                 radius = entity.dxf.radius
                 start_angle = entity.dxf.start_angle
                 end_angle = entity.dxf.end_angle
-                
                 if start_angle > end_angle:
                     end_angle += 360
-                    
                 arc_patch = Arc((center.x, center.y), 2*radius, 2*radius, angle=0,
                                 theta1=start_angle, theta2=end_angle,
                                 color=color, linewidth=linewidth)
                 ax.add_patch(arc_patch)
-                    
-                all_x_coords.extend([center.x - radius, center.x + radius])
-                all_y_coords.extend([center.y - radius, center.y + radius])
-                processed_entities += 1
-                    
-            elif entity.dxftype() == 'CIRCLE':
-                center = entity.dxf.center
-                radius = entity.dxf.radius
-                
-                circle_patch = plt.Circle((center.x, center.y), radius, fill=False, 
-                                        color=color, linewidth=linewidth)
-                ax.add_patch(circle_patch)
-                    
                 all_x_coords.extend([center.x - radius, center.x + radius])
                 all_y_coords.extend([center.y - radius, center.y + radius])
                 processed_entities += 1
 
+            elif entity.dxftype() == 'CIRCLE':
+                center = entity.dxf.center
+                radius = entity.dxf.radius
+                circle_patch = plt.Circle((center.x, center.y), radius, fill=False, color=color, linewidth=linewidth)
+                ax.add_patch(circle_patch)
+                all_x_coords.extend([center.x - radius, center.x + radius])
+                all_y_coords.extend([center.y - radius, center.y + radius])
+                processed_entities += 1
+
+            # 修改 TEXT 实体处理部分
+            elif entity.dxftype() == 'TEXT':
+                insert = entity.dxf.insert
+                text = entity.dxf.text
+                height = entity.dxf.height if hasattr(entity.dxf, 'height') else 0.5
+                # 使用原始高度，但根据图像整体尺寸适度调整
+                font_size = height * 0.3  # 保持原始比例，调整倍数使显示效果更好
+                ax.text(insert.x, insert.y, text, color=color, fontsize=font_size)
+                all_x_coords.append(insert.x)
+                all_y_coords.append(insert.y)
+                processed_entities += 1
+
+            # 修改 MTEXT 实体处理部分
+            elif entity.dxftype() == 'MTEXT':
+                insert = entity.dxf.insert
+                text = entity.text
+                height = entity.dxf.height if hasattr(entity.dxf, 'height') else 0.5
+                # 使用原始高度，但根据图像整体尺寸适度调整
+                font_size = height * 0.3  # 保持原始比例，调整倍数使显示效果更好
+                ax.text(insert.x, insert.y, text, color=color, fontsize=font_size)
+                all_x_coords.append(insert.x)
+                all_y_coords.append(insert.y)
+                processed_entities += 1
+
         # 设置坐标范围
         if all_x_coords and all_y_coords:
-            margin = 5
+            margin = 10
             ax.set_xlim(min(all_x_coords) - margin, max(all_x_coords) + margin)
             ax.set_ylim(min(all_y_coords) - margin, max(all_y_coords) + margin)
         else:
             ax.set_xlim(-10, 10)
             ax.set_ylim(-10, 10)
 
-        # 保存图像到 dxf_output 目录
-        plt.gca().set_aspect('equal', adjustable='box')
-        
-        # 确保 dxf_output 目录存在
-        output_dir = "dxf_output"
-        os.makedirs(output_dir, exist_ok=True)
+        ax.set_aspect('equal', adjustable='box')
+        plt.tight_layout()
+
+        # 保存图像
         output_dir = "dxf_output/pictures"
         os.makedirs(output_dir, exist_ok=True)
-        # 生成输出路径
         dxf_basename = os.path.basename(dxf_file_path)
         output_filename = f"{os.path.splitext(dxf_basename)[0]}.png"
         output_path = os.path.join(output_dir, output_filename)
-        
-        plt.savefig(output_path, bbox_inches='tight', pad_inches=0.1, dpi=100, format='png')
+
+        plt.savefig(output_path, bbox_inches='tight', pad_inches=0.1, dpi=200, format='png')
         plt.close(fig)
         plt.close('all')
 
@@ -595,26 +460,102 @@ def process_dxf_file_simple(dxf_file_path):
                 "type_breakdown": entity_counts
             }
         }
-        
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
-            
         return response
 
     except Exception as e:
-        response = {
-            "status": "error",
-            "message": str(e)
-        }
+        response = {"status": "error", "message": str(e)}
         if SHOW_TIMING:
             response["processing_time"] = time.time() - start_time
         return response
+@app.route('/objects/break_all_blocks', methods=['GET'])
+def break_all_blocks():
+    """
+    分解DXF/DWG文件中的所有块引用为基本图形元素
+    """
+    start_time = time.time()
+    file_path = request.args.get('dxf_path')
+    if not file_path:
+        response = {"status": "error", "message": "缺少dxf_path参数"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 400
 
+    if not os.path.exists(file_path):
+        response = {"status": "error", "message": f"文件不存在: {file_path}"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 404
 
+    file_ext = os.path.splitext(file_path)[1].lower()
 
+    try:
+        if file_ext == '.dwg':
+            conversion_result = convert_dwg_to_dxf(file_path)
+            if conversion_result["status"] != "success":
+                if SHOW_TIMING:
+                    conversion_result["processing_time"] = time.time() - start_time
+                return jsonify(conversion_result), 500
+            dxf_file_path = conversion_result["dxf_path"]
+        elif file_ext == '.dxf':
+            dxf_file_path = file_path
+        else:
+            response = {"status": "error", "message": f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。"}
+            if SHOW_TIMING:
+                response["processing_time"] = time.time() - start_time
+            return jsonify(response), 400
 
+        # 读取DXF文件
+        doc = ezdxf.readfile(dxf_file_path)
+        msp = doc.modelspace()
 
+        # 统计分解前的实体数量
+        original_entity_count = len(msp)
 
+        # 记录分解的块引用数量
+        blocks_broken = 0
+        exploded_entities = 0
+        
+        # 收集所有需要分解的INSERT实体
+        inserts = [entity for entity in msp if entity.dxftype() == 'INSERT']
+        
+        # 分解所有块引用
+        for insert in inserts:
+            try:
+                # 使用ezdxf内置的explode方法分解块
+                exploded = insert.explode()
+                blocks_broken += 1
+                exploded_entities += len(exploded)
+            except Exception as e:
+                print(f"分解块 '{insert.dxf.name}' 时出错: {e}")
+
+        # 保存修改后的DXF文件
+        output_dir = "dxf_output/broken"
+        os.makedirs(output_dir, exist_ok=True)
+        dxf_basename = os.path.basename(dxf_file_path)
+        output_filename = f"{os.path.splitext(dxf_basename)[0]}_broken.dxf"
+        output_path = os.path.join(output_dir, output_filename)
+        
+        doc.saveas(output_path)
+
+        response = {
+            "status": "success",
+            "message": f"成功分解 {blocks_broken} 个块引用",
+            "original_entity_count": original_entity_count,
+            "exploded_entities_count": exploded_entities,
+            "output_path": output_path,
+            "blocks_broken": blocks_broken
+        }
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response)
+
+    except Exception as e:
+        response = {"status": "error", "message": f"处理文件时出错: {str(e)}"}
+        if SHOW_TIMING:
+            response["processing_time"] = time.time() - start_time
+        return jsonify(response), 500
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -662,16 +603,22 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "message": "DXF/DWG基础处理服务已启动",
         "endpoints": {
-            "process_dxf": "GET /process_dxf?dxf_path=<path_to_dxf_or_dwg_file> (处理DXF/DWG文件并返回JSON结果)",
-            "objects_signatures": "GET /objects/signatures?dxf_path=<path_to_dxf_or_dwg_file> (获取所有对象签名)",
-            "image": "GET /image?path=<path_to_image> (获取图像文件)"
+            "get_texts": "GET /objects/texts?dxf_path=<path_to_dxf_or_dwg_file>",
+            "list_dxf_files": "GET /list_dxf_files?folder_path=<path_to_folder>",
+            "render_dxf_image": "GET /render_dxf_image?dxf_path=<path_to_dxf_or_dwg_file>",
+            "image": "GET /image?path=<path_to_image>",
+            "break_all_blocks":"GET /objects/break_all_blocks?dxf_path=<path_to_dxf_or_dwg_file>"
         },
         "notes": "支持DXF和DWG文件格式。DWG文件会自动转换为DXF格式后再处理。"
     })
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5303, debug=True)
