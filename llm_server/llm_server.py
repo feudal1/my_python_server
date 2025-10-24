@@ -34,9 +34,7 @@ else:
 
 logger = logging.getLogger(__name__)
 
-# 加载 .env 文件中的环境变量
-dotenv_path = r'E:\code\apikey\.env'
-load_dotenv(dotenv_path)
+
 app = Flask(__name__)
 
 from flask_cors import CORS
@@ -45,6 +43,9 @@ CORS(app)
 class LLMService:
     def __init__(self):
         # 从环境变量中获取 DeepSeek 参数
+        # 加载 .env 文件中的环境变量
+        dotenv_path = r'E:\code\apikey\.env'
+        load_dotenv(dotenv_path)
         self.api_url = os.getenv('deepseek_OPENAI_API_URL')
         self.model_name = os.getenv('deepseek_MODEL_NAME')
         self.api_key = os.getenv('deepseek_OPENAI_API_KEY')
@@ -121,6 +122,8 @@ class LLMService:
 class VLMService:
     def __init__(self):
         # 从环境变量中获取 VLM 参数
+        dotenv_path = r'E:\code\apikey\.env'
+        load_dotenv(dotenv_path)
         self.api_url = os.getenv('VLM_OPENAI_API_URL')
         self.model_name = os.getenv('VLM_MODEL_NAME')
         self.api_key = os.getenv('VLM_OPENAI_API_KEY')
@@ -250,16 +253,28 @@ vlm_service = VLMService()
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat_endpoint():
+    """
+    name:messages
+     name:sender
+    """
     try:
         logger.info("收到聊天请求")
         
         if request.method == 'GET':
             # 从查询参数中获取 messages 和 tools
             messages_json = request.args.get('messages', '[]')
+            sender = request.args.get('sender', None)
             tools_json = request.args.get('tools', None)
             
             # 解析 JSON 字符串
-            messages = json.loads(messages_json) if messages_json else []
+            if  sender :
+                messages = [{
+                "role": sender,
+                "content":  messages_json,
+                
+            }]
+            else:
+                messages = json.loads(messages_json) if messages_json else []
             tools = json.loads(tools_json) if tools_json else None
             
         elif request.method == 'POST':
@@ -288,6 +303,10 @@ def chat_endpoint():
 # 在现有导入和代码之后添加以下内容
 @app.route('/vlm/chat', methods=['GET'])
 def vlm_chat_get_endpoint():
+    """
+    name:message
+    name:image_source
+    """
     try:
         logger.info("收到VLM聊天GET请求")
         

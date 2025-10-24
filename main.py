@@ -205,7 +205,7 @@ class ServiceManager:
         print(f"\n=== {service_name} 路由信息 (端口: {port}) ===")
         routes_info = self.get_service_routes(port)
         if routes_info and 'routes' in routes_info:
-            for route in routes_info['routes']:
+            for idx, route in enumerate(routes_info['routes'], 1):
                 methods = ', '.join([m for m in route['methods'] if m != 'HEAD'])
                 # 只显示第一行描述
                 description = route['description'].split('\n')[0] if route['description'] else ''
@@ -236,13 +236,13 @@ class ServiceManager:
                     # 如果找到查询参数，则构建带参数的URL示例
                     if params:
                         query_string = '&'.join(params)
-                        print(f"http://localhost:{port}{route['rule']}?{query_string} [{methods}] - {description}")
+                        print(f"{idx}. http://localhost:{port}{route['rule']}?{query_string} [{methods}] - {description}")
                     else:
                         # 有参数定义但未解析出具体参数的情况
-                        print(f"{base_url} [{methods}] - {description}")
+                        print(f"{idx}. {base_url} [{methods}] - {description}")
                 else:
                     # 非GET请求或没有描述的情况
-                    print(f"{base_url} [{methods}] - {description}")
+                    print(f"{idx}. {base_url} [{methods}] - {description}")
         else:
             print(f"  无法获取路由信息或服务尚未启动")
         print("=" * 50)
@@ -343,16 +343,99 @@ class ServiceManager:
             print(f"{i}. {service['name']} (端口: {service['port']}, 状态: {status})")
         print("=" * 30)
 
+    def execute_get_request(self, port, route_rule, service_name, route_index, route_info):
+        """
+        执行GET请求，支持参数输入
+        """
+        try:
+            # 解析路由参数
+            params = {}
+            if route_info.get('description'):
+                lines = route_info['description'].split('\n')
+                required_params = []
+                optional_params = []
+                
+                for line in lines:
+                    if 'name:' in line:
+                        # 提取参数信息
+                        param_name_match = re.search(r'name:\s*(\w+)', line)
+                        if param_name_match:
+                            param_name = param_name_match.group(1)
+                            
+                            # 检查是否必需
+                            required = 'required:' in line and 'required: true' in line
+                            
+                            # 检查是否有默认值
+                            default_match = re.search(r'default:\s*([^,\n]+)', line)
+                            default_val = default_match.group(1).strip() if default_match else None
+                            
+                            if default_val is not None:
+                                optional_params.append((param_name, default_val))
+                            elif required:
+                                required_params.append(param_name)
+                            else:
+                                optional_params.append((param_name, None))
+                
+                # 获取用户输入的必需参数
+                for param_name in required_params:
+                    value = input(f"请输入参数 '{param_name}' 的值: ").strip()
+                    if value:
+                        params[param_name] = value
+                    else:
+                        print(f"参数 '{param_name}' 是必需的")
+                        return
+                
+                # 询问可选参数
+                for param_name, default_val in optional_params:
+                    prompt = f"请输入参数 '{param_name}' 的值"
+                    if default_val is not None:
+                        prompt += f" (默认: {default_val})"
+                    prompt += " (直接回车跳过): "
+                    
+                    value = input(prompt).strip()
+                    if value:
+                        params[param_name] = value
+                    elif default_val is not None:
+                        params[param_name] = default_val
+        
+            url = f"http://localhost:{port}{route_rule}"
+            print(f"正在执行请求: {url}")
+            if params:
+                print(f"参数: {params}")
+            
+            response = requests.get(url, params=params, timeout=10)
+            print(f"\n=== 响应结果 (服务: {service_name}, 路由 #{route_index}) ===")
+            print(f"状态码: {response.status_code}")
+            print(f"请求URL: {response.url}")
+            print(f"响应头: {dict(response.headers)}")
+            
+            # 尝试解析JSON响应
+            try:
+                json_data = response.json()
+                print("响应内容 (JSON格式):")
+                print(json.dumps(json_data, indent=2, ensure_ascii=False))
+            except:
+                # 如果不是JSON格式，则按文本处理
+                print("响应内容 (文本格式):")
+                print(response.text)
+            print("=" * 50)
+            
+        except Exception as e:
+            print(f"执行请求时出错: {str(e)}")
+
     def manage_services_menu(self):
         """服务管理菜单"""
+        # 只在进入菜单时显示一次服务列表
+      
+        
         while True:
-            # 显示服务列表
-            self.list_services()
-            
             # 显示可用命令
             print("\n可用命令:")
             print("start <编号> - 启动服务")
             print("stop <编号> - 停止服务")
+            print("routes <编号> - 显示服务路由")
+            print("get <编号> <路由序号> - 执行GET请求")
+            print("list - 显示服务列表")
             print("exit - 退出程序")
             
             # 获取用户输入
@@ -380,6 +463,59 @@ class ServiceManager:
                 except (ValueError, IndexError):
                     print("请输入有效的命令格式: stop <编号>")
                     
+            elif command.startswith("routes"):
+                try:
+                    service_index = int(command.split()[1])
+                    if 1 <= service_index <= len(self.services_config):
+                        service_name = list(self.services_config.keys())[service_index-1]
+                        service = self.services_config[service_name]
+                        self.print_service_routes(service_name, service['port'])
+                    else:
+                        print("无效的服务编号")
+                except (ValueError, IndexError):
+                    print("请输入有效的命令格式: routes <编号>")
+                    
+            elif command.startswith("get"):
+                try:
+                    parts = command.split()
+                    if len(parts) < 3:
+                        print("请输入有效的命令格式: get <编号> <路由序号>")
+                        continue
+                        
+                    service_index = int(parts[1])
+                    route_index = int(parts[2])
+                    
+                    if 1 <= service_index <= len(self.services_config):
+                        service_name = list(self.services_config.keys())[service_index-1]
+                        service = self.services_config[service_name]
+                        
+                        # 获取路由信息
+                        routes_info = self.get_service_routes(service['port'])
+                        if routes_info and 'routes' in routes_info:
+                            if 1 <= route_index <= len(routes_info['routes']):
+                                route = routes_info['routes'][route_index-1]
+                                if 'GET' in route['methods']:
+                                    self.execute_get_request(
+                                        service['port'], 
+                                        route['rule'], 
+                                        service_name, 
+                                        route_index,
+                                        route
+                                    )
+                                else:
+                                    print("该路由不支持GET方法")
+                            else:
+                                print("无效的路由序号")
+                        else:
+                            print("无法获取路由信息")
+                    else:
+                        print("无效的服务编号")
+                except (ValueError, IndexError):
+                    print("请输入有效的命令格式: get <编号> <路由序号>")
+                    
+            elif command == "list":
+                self.list_services()
+                
             elif command == "exit":
                 break
                 

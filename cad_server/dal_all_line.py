@@ -1,6 +1,7 @@
 from pyautocad import Autocad, APoint
 
 
+# 修改 get_selection_or_model_space 函数部分代码
 def get_selection_or_model_space(acad, doc):
     """
     获取用户选择的对象，如果没有选择则遍历模型空间
@@ -28,8 +29,19 @@ def get_selection_or_model_space(acad, doc):
     print("请选择对象")
     
     try:
-        # 尝试获取当前选择集
-        selection_set = doc.SelectionSets.Add("Temp_Selection_Set")
+        # 先尝试删除可能已存在的临时选择集
+        try:
+            existing_selection_set = doc.SelectionSets.Item("Temp_Selection_Set")
+            existing_selection_set.Delete()
+        except:
+            # 如果不存在则忽略错误
+            pass
+        
+        # 使用唯一名称避免冲突
+        import time
+        unique_name = f"Temp_Selection_Set_{int(time.time() * 1000) % 10000}"
+        
+        selection_set = doc.SelectionSets.Add(unique_name)
         selection_set.SelectOnScreen()
         
         if selection_set.Count > 0:
@@ -64,7 +76,6 @@ def get_selection_or_model_space(acad, doc):
     except Exception as e:
         print(f"无法访问模型空间: {e}")
         return []
-
 def process_entities(entities):
     """
     处理实体列表，提取直线并计算边界
