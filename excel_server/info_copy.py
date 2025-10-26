@@ -1,10 +1,11 @@
 import pandas as pd
 import os
+import re
 from pathlib import Path
 
 def merge_excel_data(source_file, target_file, output_file):
     """
-    将源Excel文件中的规格、长度、单重信息按图号匹配到目标Excel文件
+    将源Excel文件中的数量信息按零件号匹配到目标Excel文件
     
     Args:
         source_file: 包含完整信息的源Excel文件路径
@@ -22,9 +23,10 @@ def merge_excel_data(source_file, target_file, output_file):
     if not os.path.exists(target_file):
         raise FileNotFoundError(f"目标文件不存在: {target_file}")
     
-    # 读取两个Excel文件，尝试不同的header行
+    # 读取两个Excel文件，源文件使用灵活读取，目标文件使用第二行作为标题
     source_df = read_excel_with_flexible_header(source_file)
-    target_df = read_excel_with_flexible_header(target_file)
+    # 直接使用第二行(索引为1)作为目标文件的标题行
+    target_df = pd.read_excel(target_file, header=1)
     
     # 显示两个文件的列名
     print("源文件列名:", source_df.columns.tolist())
@@ -34,9 +36,8 @@ def merge_excel_data(source_file, target_file, output_file):
     # 定义可能的列名映射
     column_mapping = {
         '零件号': ['零件号', '图号', '部件号', 'Part Number', 'PartNo', '图号/零件号'],
-        '型材': ['型材', '规格', '型号', 'Profile', 'Spec'],
-        '长度mm': ['长度mm', '长度', 'Length', '长'],
-        '单重kg': ['单重kg', '单重', '重量', 'Weight', '单件重量']
+        '数量': ['数量', 'Qty', 'Quantity', '件数'],
+
     }
     
     # 查找实际存在的列名
@@ -65,12 +66,9 @@ def merge_excel_data(source_file, target_file, output_file):
     
     # 提取需要的列（使用实际列名）
     source_columns_to_extract = [actual_columns['零件号']]
-    if '型材' in actual_columns:
-        source_columns_to_extract.append(actual_columns['型材'])
-    if '长度mm' in actual_columns:
-        source_columns_to_extract.append(actual_columns['长度mm'])
-    if '单重kg' in actual_columns:
-        source_columns_to_extract.append(actual_columns['单重kg'])
+    if '数量' in actual_columns:
+        source_columns_to_extract.append(actual_columns['数量'])
+
     
     source_needed = source_df[source_columns_to_extract]
     
@@ -78,8 +76,15 @@ def merge_excel_data(source_file, target_file, output_file):
     rename_dict = {actual_columns[key]: key for key in actual_columns}
     source_needed = source_needed.rename(columns=rename_dict)
     
-    # 使用merge按零件号合并数据
-    result_df = pd.merge(target_df, source_needed, on='零件号', how='left')
+    # 添加标准化零件号列用于匹配
+    source_needed['标准化零件号'] = source_needed['零件号'].apply(normalize_part_number)
+    target_df['标准化零件号'] = target_df['零件号'].apply(normalize_part_number)
+    
+    # 使用标准化零件号合并数据
+    result_df = pd.merge(target_df, source_needed, on='标准化零件号', how='left', suffixes=('', '_source'))
+    
+    # 删除临时的标准化零件号列
+    result_df = result_df.drop(['标准化零件号'], axis=1)
     
     # 确保输出目录存在
     output_dir = os.path.dirname(output_file)
@@ -89,6 +94,26 @@ def merge_excel_data(source_file, target_file, output_file):
     # 保存结果
     result_df.to_excel(output_file, index=False)
     print(f"数据合并完成，已保存到 {output_file}")
+
+def normalize_part_number(part_number):
+    """
+    标准化零件号，提取基本的数字和连字符部分用于匹配
+    例如: 
+    "21085-3000-1001-0100-01-" -> "21085-3000-1001-0100-01"
+    "21085-3000-1001-0100-01.stp" -> "21085-3000-1001-0100-01"
+    """
+    if pd.isna(part_number):
+        return part_number
+    
+    part_str = str(part_number)
+    
+    # 提取以数字开头，由数字和连字符组成的部分，并确保不以连字符结尾
+    match = re.search(r'^([\d\-]*\d)', part_str)
+    if match:
+        return match.group(1)
+    
+    # 如果没有匹配到，则返回原始值
+    return part_str
 
 def read_excel_with_flexible_header(file_path):
     """
@@ -123,13 +148,9 @@ def manual_column_mapping(df):
     
     # 如果列数足够，基于位置映射
     if len(columns) >= 2:
-        mapping['零件号'] = columns[1]  # 假设第2列是零件号
-    if len(columns) >= 3:
-        mapping['型材'] = columns[2]    # 假设第3列是型材
-    if len(columns) >= 4:
-        mapping['长度mm'] = columns[3]  # 假设第4列是长度
-    if len(columns) >= 5:
-        mapping['单重kg'] = columns[4]  # 假设第5列是单重
+        mapping['零件号'] = columns[0]  # 假设第1列是零件号
+        mapping['数量'] = columns[1]   # 假设第2列是数量
+
     
     return mapping
 
@@ -142,7 +163,9 @@ load_dotenv(dotenv_path)
 source_file = os.getenv('info_copy_source_file') 
 target_file = os.getenv('info_copy_target_file') 
 output_file = os.getenv('info_copy_output_file') 
-
+print(f"- info_copy_source_file{source_file}")
+print(f"- info_copy_target_file{target_file}")
+print(f"- info_copy_output_file{output_file}")
 # 检查环境变量是否正确加载
 if not source_file or not target_file or not output_file:
     print("错误: 请检查.env文件中的配置，确保以下环境变量已设置:")
@@ -152,9 +175,9 @@ if not source_file or not target_file or not output_file:
     input("按回车键退出...")
 else:
     # 标准化路径
-    source_file = str(Path(source_file.strip()))
-    target_file = str(Path(target_file.strip()))
-    output_file = str(Path(output_file.strip()))
+    source_file = source_file
+    target_file = target_file
+    output_file = output_file
 
     # 调用函数
     try:
