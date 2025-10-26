@@ -30,9 +30,23 @@ def parse_vlm_response(response_data):
     解析 VLM 返回的结构化数据
     """
     try:
-        # 假设返回的是 JSON 字符串
+        # 获取响应内容
         result = response_data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+        
+        # 去除可能的代码块标记
+        if result.startswith("```json"):
+            result = result[7:]  # 去除开头的 ```json
+        if result.startswith("```"):
+            result = result[3:]  # 去除可能的 ```
+        if result.endswith("```"):
+            result = result[:-3]  # 去除结尾的 ```
+        
+        # 去除首尾空白字符
+        result = result.strip()
+        
+        # 解析JSON
         parsed = json.loads(result)
+        
         # 只保留 drawing_info 字段
         if "drawing_info" in parsed:
             return {"drawing_info": parsed["drawing_info"]}
@@ -128,7 +142,7 @@ def analyze_image_and_generate_excel(image_path):
     messages = [
         {
             "role": "user",
-            "content": '''请分析这张工程图纸，提取图纸中的关键信息，包括图号、长度、宽度、数量等信息，并以 JSON 格式返回。
+            "content": '''请提取这张图片的信息，尽可能提取出图号、数量（要算）等信息，图号类似F2N-数字并以 JSON 格式返回。
 输出格式要求：
 {
     "drawing_info": [
@@ -160,14 +174,15 @@ def analyze_image_api():
     """
     Flask 接口：通过URL参数指定图片路径，调用VLM分析并生成Excel文件
     
-  name:image_path
+    参数:
+    - image_path: 图片路径 (必需)
 
     """
     try:
         # 从请求参数中获取图片路径
         image_path = request.args.get('image_path')
      
-        
+         
         if not image_path:
             return jsonify({"error": "缺少 image_path 参数"}), 400
         
@@ -193,61 +208,6 @@ def analyze_image_api():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/analyze-image-data', methods=['GET'])
-def analyze_image_data_api():
-    """
-    Flask 接口：通过URL参数指定图片路径，调用VLM分析并返回JSON数据
-    
-    请求格式：
-    GET /api/analyze-image-data?image_path=<图片路径>
-    
-    参数：
-    - image_path: 输入PNG图像路径（必需）
-    
-    返回：
-    JSON 格式的分析结果
-    """
-    try:
-        # 从请求参数中获取图片路径
-        image_path = request.args.get('image_path')
-        
-        if not image_path:
-            return jsonify({"error": "缺少 image_path 参数"}), 400
-        
-        # 检查输入文件是否存在
-        if not os.path.exists(image_path):
-            return jsonify({"error": f"图像文件 '{image_path}' 不存在"}), 400
-            
-        # 构造请求消息
-        messages = [
-            {
-                "role": "user",
-                "content": '''请分析这张工程图纸，提取图纸中的关键信息，包括图号、长度、宽度、数量等信息，并以 JSON 格式返回。
-输出格式要求：
-{
-    "drawing_info": [
-        {
-            "drawing_number": "ABC123",
-            "length": "1200",
-            "width": "800",
-            "quantity": "5",
-            "remark": "不锈钢板"
-        }
-    ]
-}'''
-            }
-        ]
-
-        # 直接调用 VLMService 而不是通过 HTTP 请求
-        try:
-            result = vlm_service.create_with_image(messages, image_path)
-            extracted_data = parse_vlm_response(result)
-            return jsonify(extracted_data)
-        except Exception as e:
-            return jsonify({"error": "VLM 调用失败", "details": str(e)}), 500
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/routes')
 def show_routes():
@@ -265,13 +225,33 @@ def show_routes():
         })
     return {'routes': routes}
 
-import argparse
-
-# 解析命令行参数
-parser = argparse.ArgumentParser()
-parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
-args = parser.parse_args()
-
-# 使用指定的端口运行 Flask 应用
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=args.port, debug=True)
+    # 检查是否以脚本方式直接运行
+    if len(sys.argv) == 1:
+        # 使用 input() 获取图像路径
+        print("请输入图像文件路径（输入 'quit' 退出）:")
+        while True:
+            image_path = input("图像路径: ").strip()
+            
+            if image_path.lower() == 'quit':
+                print("程序退出")
+                break
+                
+            if not os.path.exists(image_path):
+                print(f"错误: 图像文件 '{image_path}' 不存在，请重新输入")
+                continue
+                
+            try:
+                analyze_image_and_generate_excel(image_path)
+                print("处理完成！")
+                break
+            except Exception as e:
+                print(f"处理过程中出现错误: {e}")
+                continue
+    else:
+        # Flask 服务器模式
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--port', type=int, default=5001, help='Port to run the server on')
+        args = parser.parse_args()
+        app.run(host='0.0.0.0', port=args.port, debug=True)
