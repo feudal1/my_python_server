@@ -34,13 +34,15 @@ class ImageToExcelConverter:
         # 定义提取字段配置，通过修改这个列表可以同时改变提示语句和JSON示例
         self.extraction_fields = [
             {"key": "drawing_number", "label": "ABC123", "display_name": "图号"},
+            {"key": "specification", "label": "PL厚度*宽度*长度", "display_name": "规格"},
+            
+            {"key": "thickness", "label": "10", "display_name": "厚度(mm)"},
             {"key": "length", "label": "1200", "display_name": "长度(mm)"},
             {"key": "width", "label": "800", "display_name": "宽度(mm)"},
-            {"key": "thickness", "label": "10", "display_name": "厚度(mm)"},
+
             {"key": "quantity", "label": "5", "display_name": "数量"},
             {"key": "material", "label": "不锈钢", "display_name": "材料"},
-            {"key": "specification", "label": "SUS304", "display_name": "规格"},
-            {"key": "process", "label": "切割", "display_name": "工艺"},
+          
             {"key": "remark", "label": "不锈钢板", "display_name": "备注"}
         ]
     
@@ -80,6 +82,17 @@ class ImageToExcelConverter:
             # 尝试转换为整数
             if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
                 return int(value)
+            
+            # 处理Unicode数字字符（如①②③等）
+            try:
+                unicode_digits = {
+                    '①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5,
+                    '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10
+                }
+                if value in unicode_digits:
+                    return unicode_digits[value]
+            except:
+                pass
             
             # 尝试转换为浮点数
             try:
@@ -221,7 +234,12 @@ class ImageToExcelConverter:
         Args:
             image_path (str): 输入图像路径
         """
-        output_path = r"excel_output/npg2excel/extracted_data.xlsx"
+        # 修改这里：将Excel文件保存在与图片相同的目录下
+        image_dir = os.path.dirname(image_path)
+        image_name = os.path.splitext(os.path.basename(image_path))[0]
+        output_path = os.path.join(image_dir, f"{image_name}.xlsx")
+        
+        # 确保输出目录存在
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         # 根据当前字段配置动态生成提示语句
@@ -240,14 +258,14 @@ class ImageToExcelConverter:
             {
                 "role": "user",
                 "content": f'''{instruction}，并以 JSON 格式返回。
-输出格式要求：
-{{
-    "drawing_info": [
-        {{
-{json_fields_block}
-        }}
-    ]
-}}'''
+    输出格式要求：
+    {{
+        "drawing_info": [
+            {{
+    {json_fields_block}
+            }}
+        ]
+    }}'''
             }
         ]
 
@@ -279,15 +297,18 @@ def analyze_image_api():
         if not os.path.exists(image_path):
             return jsonify({"error": f"图像文件 '{image_path}' 不存在"}), 400
             
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_excel:
-            output_path = tmp_excel.name
+        # 修改这里：将Excel文件保存在与图片相同的目录下
+        image_dir = os.path.dirname(image_path)
+        image_name = os.path.splitext(os.path.basename(image_path))[0]
+        output_path = os.path.join(image_dir, f"{image_name}.xlsx")
         
         converter.analyze_image_and_generate_excel(image_path)
         
         return send_file(
             output_path,
             as_attachment=True,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            download_name=f'{image_name}.xlsx'  # 明确指定下载文件名
         )
         
     except Exception as e:

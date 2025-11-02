@@ -15,6 +15,8 @@ import threading
 import webbrowser
 import io
 import re
+import tkinter as tk
+from tkinter import filedialog
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -734,8 +736,27 @@ def start_processing():
     dotenv_path = r'E:\code\apikey\.env'
     load_dotenv(dotenv_path)
     
-    current_state['pdf_directory'] = os.getenv('PDF_EXCEL_pdf_directory')
-    current_state['excel_path'] = os.getenv('PDF_EXCEL_excel_path')
+    # 创建隐藏的根窗口用于文件选择对话框
+    root = tk.Tk()
+    root.withdraw()  # 隐藏主窗口
+    root.attributes('-topmost', True)  # 确保对话框在最前端
+    
+    # 弹窗选择PDF目录
+    pdf_directory = filedialog.askdirectory(
+        title="请选择包含PDF文件的目录"
+    )
+    if not pdf_directory:
+        root.destroy()
+        return jsonify({'error': '未选择PDF目录'})
+
+    # 设置Excel文件路径为PDF目录下的固定文件名
+    excel_path = os.path.join(pdf_directory, '分类结果.xlsx')
+    
+    current_state['pdf_directory'] = pdf_directory
+    current_state['excel_path'] = excel_path
+    
+    # 销毁根窗口
+    root.destroy()
     
     logger.info(f"开始处理，PDF目录: {current_state['pdf_directory']}")
     logger.info(f"Excel文件路径: {current_state['excel_path']}")
