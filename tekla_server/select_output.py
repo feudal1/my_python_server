@@ -271,12 +271,12 @@ try:
         
         # 如果需要也可以选择特定截面类型的构件
         print("\n=== 选择特定截面类型 ===")
-        profile_type = "RHS200*200*5"  # 修改为你想选择的实际截面类型
+       
         select_beams_by_profile(model, profile_type)
         
         # 导出特定截面类型的构件为IFC文件
         print("\n=== 导出特定截面类型为IFC ===")
-        profile_type = "RHS200*200*5"  # 与之前使用的相同截面类型
+        
         export_file_path = r"C:\temp\exported_beams.ifc"  # 修改为实际想要保存的路径
         export_beams_to_ifc_by_profile(model, profile_type, export_file_path)
     else:

@@ -432,6 +432,8 @@ class DXFTextToExcelConverter:
             
             # 检查文件类型，如果是DWG则先转换为DXF
             file_ext = os.path.splitext(dxf_file_path)[1].lower()
+            original_file_path = dxf_file_path  # 保存原始文件路径用于确定输出目录
+            
             if file_ext == '.dwg':
                 logger.info(f"检测到DWG文件，开始转换为DXF: {dxf_file_path}")
                 convert_result = self.convert_dwg_to_dxf(dxf_file_path)
@@ -445,9 +447,10 @@ class DXFTextToExcelConverter:
             elif file_ext != '.dxf':
                 raise ValueError(f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。")
             
-            # 如果没有提供输出文件夹，使用默认位置
+            # 如果没有提供输出文件夹，则使用源文件所在目录
             if not output_folder:
-                output_folder = os.path.join(current_dir, "output")
+                # 使用原始文件（DXF或DWG）所在的目录作为输出目录
+                output_folder = os.path.dirname(original_file_path)
             
             # 读取DXF文件中的文本
             dxf_data = self.read_dxf_texts(dxf_file_path)
@@ -470,7 +473,6 @@ class DXFTextToExcelConverter:
         except Exception as e:
             logger.error(f"处理过程中发生错误: {str(e)}")
             raise
-
 if __name__ == "__main__":
     try:
         converter = DXFTextToExcelConverter()
