@@ -172,77 +172,85 @@ def calculate_dimensions(bounds):
     return None, None  
   
   
-def add_dal_aligned_dimension(doc, bounds):  
-    """  
-    添加DAL对齐标注，使用TextMovement和TextPosition控制文字位置  
-    """  
-    try:  
-        min_x, min_y, min_z, max_x, max_y, max_z = bounds  
-        length = round(max_x - min_x, 1)  
-        width = round(max_y - min_y, 1)  
-          
-        # 计算偏移量  
-        offset = max(length, width) * 0.3  
-          
-        # 定义标注的两个点（水平方向）  
-        pt1 = APoint(min_x, min_y)  
-        pt2 = APoint(max_x, min_y)  
-        line_point = APoint((min_x + max_x) / 2, min_y - offset)  
-          
-        # 添加水平对齐标注  
-        dim1 = doc.ModelSpace.AddDimAligned(pt1, pt2, line_point)  
-        dim1.TextOverride = f"{length}"  
-        # 使用TextMovement和TextPosition控制文字位置  
-        dim1.TextMovement = 2  # 固定文字位置  
-        dim1.TextPosition = line_point  
-          
-        # 定义标注的两个点（垂直方向）  
-        pt3 = APoint(min_x, min_y)  
-        pt4 = APoint(min_x, max_y)  
-        line_point2 = APoint(min_x - offset, (min_y + max_y) / 2)  
-          
-        # 添加垂直对齐标注  
-        dim2 = doc.ModelSpace.AddDimAligned(pt3, pt4, line_point2)  
-        dim2.TextOverride = f"{width}"  
-        # 使用TextMovement和TextPosition控制文字位置  
-        dim2.TextMovement = 2  # 固定文字位置  
-        dim2.TextPosition = line_point2  
-          
-        return dim1, dim2  
-    except Exception as e:  
-        print(f"添加对齐标注失败: {e}")  
-        return None, None  
-  
-  
-def add_circle_diameter_dimension(doc, circle_entity, offset):  
-    """  
-    添加圆形的直径标注，使用TextMovement和TextPosition控制文字位置  
-    """  
-    try:  
-        # 获取圆心和半径  
-        center = circle_entity.Center  
-        radius = circle_entity.Radius  
-          
-        # 计算直径两端点  
-        pt1 = APoint(center[0] - radius, center[1])  
-        pt2 = APoint(center[0] + radius, center[1])  
-          
-        # 计算标注文本位置点（在圆上方）  
-        text_point = APoint(center[0], center[1] + radius + offset)  
-          
-        # 使用AddDimAligned并手动设置为直径标注  
-        dim = doc.ModelSpace.AddDimAligned(pt1, pt2, text_point)  
-        diameter_value = radius * 2  
-        # 设置直径标注样式  
-        dim.TextOverride = f"⌀{int(diameter_value)}" if diameter_value == int(diameter_value) else f"⌀{diameter_value:.1f}"  
-        # 使用TextMovement和TextPosition控制文字位置  
-        dim.TextMovement = 2  # 固定文字位置  
-        dim.TextPosition = text_point  
-          
-        return dim  
-    except Exception as e:  
-        print(f"添加圆形直径标注失败: {e}")  
-        return None  
+def add_dal_aligned_dimension(doc, bounds):
+    """
+    添加DAL对齐标注，使用TextMovement和TextPosition控制文字位置
+    并增加标注文字大小
+    """
+    try:
+        min_x, min_y, min_z, max_x, max_y, max_z = bounds
+        length = round(max_x - min_x, 1)
+        width = round(max_y - min_y, 1)
+        
+        # 计算偏移量
+        offset = max(length, width) * 0.3
+        
+        # 定义标注的两个点（水平方向）
+        pt1 = APoint(min_x, min_y)
+        pt2 = APoint(max_x, min_y)
+        line_point = APoint((min_x + max_x) / 2, min_y - offset)
+        
+        # 添加水平对齐标注
+        dim1 = doc.ModelSpace.AddDimAligned(pt1, pt2, line_point)
+        dim1.TextOverride = f"{length}"
+        # 使用TextMovement和TextPosition控制文字位置
+        dim1.TextMovement = 2  # 固定文字位置
+        dim1.TextPosition = line_point
+        # 增加文字高度
+        dim1.TextHeight = max(length, width) * 0.05  # 设置为整体尺寸的5%
+        
+        # 定义标注的两个点（垂直方向）
+        pt3 = APoint(min_x, min_y)
+        pt4 = APoint(min_x, max_y)
+        line_point2 = APoint(min_x - offset, (min_y + max_y) / 2)
+        
+        # 添加垂直对齐标注
+        dim2 = doc.ModelSpace.AddDimAligned(pt3, pt4, line_point2)
+        dim2.TextOverride = f"{width}"
+        # 使用TextMovement和TextPosition控制文字位置
+        dim2.TextMovement = 2  # 固定文字位置
+        dim2.TextPosition = line_point2
+        # 增加文字高度
+        dim2.TextHeight = max(length, width) * 0.05  # 设置为整体尺寸的5%
+        
+        return dim1, dim2
+    except Exception as e:
+        print(f"添加对齐标注失败: {e}")
+        return None, None
+
+
+def add_circle_diameter_dimension(doc, circle_entity, offset):
+    """
+    添加圆形的直径标注，使用TextMovement和TextPosition控制文字位置
+    并增加标注文字大小
+    """
+    try:
+        # 获取圆心和半径
+        center = circle_entity.Center
+        radius = circle_entity.Radius
+        
+        # 计算直径两端点
+        pt1 = APoint(center[0] - radius, center[1])
+        pt2 = APoint(center[0] + radius, center[1])
+        
+        # 计算标注文本位置点（在圆上方）
+        text_point = APoint(center[0], center[1] + radius + offset)
+        
+        # 使用AddDimAligned并手动设置为直径标注
+        dim = doc.ModelSpace.AddDimAligned(pt1, pt2, text_point)
+        diameter_value = radius * 2
+        # 设置直径标注样式
+        dim.TextOverride = f"⌀{int(diameter_value)}" if diameter_value == int(diameter_value) else f"⌀{diameter_value:.1f}"
+        # 使用TextMovement和TextPosition控制文字位置
+        dim.TextMovement = 2  # 固定文字位置
+        dim.TextPosition = text_point
+        # 增加文字高度
+        dim.TextHeight = radius * 0.3  # 设置为半径的30%
+        
+        return dim
+    except Exception as e:
+        print(f"添加圆形直径标注失败: {e}")
+        return None
   
   
 def main():
