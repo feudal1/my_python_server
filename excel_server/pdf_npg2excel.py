@@ -206,15 +206,15 @@ class UniversalFileToExcelConverter:
         wb = Workbook()
         ws = wb.active
         
+        # 修改：将原来的三行标题改为一行
         if image_filename:
             ws["A1"] = image_filename
-            ws.merge_cells("A1:E3")
+            ws.merge_cells("A1:E1")  # 修改：合并范围从A1:E3改为A1:E1
             ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
             ws["A1"].font = Font(size=14, bold=True)
-            # 设置标题行行高为25
-            for row_num in range(1, 4):
-                ws.row_dimensions[row_num].height = 25
-            start_row = 4
+            # 修改：只设置第一行行高
+            ws.row_dimensions[1].height = 25
+            start_row = 2  # 修改：起始行从第4行改为第2行
         else:
             start_row = 1
         
@@ -289,8 +289,7 @@ class UniversalFileToExcelConverter:
         
         wb.save(final_output_path)
         print(f"Excel 文件已保存至: {final_output_path}")
-        return final_output_path
-    
+        return final_output_path   
     def select_files(self):
         """
         弹出文件选择窗口选择多个图像或PDF文件

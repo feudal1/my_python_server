@@ -12,9 +12,18 @@
     ROUND(Weight, 2)
 )
 
-提取pl后的计算
-=ROUND(PRODUCT(--MID(SUBSTITUTE(MID(B3,FIND("PL",B3)+2,LEN(B3)),"*",REPT(" ",100)),{1,101,201},100))/1000/1000*7.85,2)
-
+钢板计算公式
+=ROUND(
+   PRODUCT(
+     --TEXTSPLIT(
+       TEXTJOIN("", TRUE, IFERROR(MID(B3, SEQUENCE(LEN(B3)), 1) * 1, 
+         IF(MID(B3, SEQUENCE(LEN(B3)), 1)="*", "*", "")
+       )),
+       "*"
+     )
+   ) / 1000000 * 7.85,
+   2
+)
 矩形管质量公式
 =LET(
     H, B6,
