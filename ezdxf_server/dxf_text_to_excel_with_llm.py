@@ -8,14 +8,14 @@ import os
 import json
 import sys
 import re
-import pandas as pd
 import subprocess
 import time
 from ezdxf import readfile
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
-from tkinter import Tk, filedialog
+import tkinter as tk
+from tkinter import filedialog
 import logging
 
 # 配置日志
@@ -49,9 +49,9 @@ class DXFTextToExcelConverter:
         
         # 定义提取字段配置，通过修改这个列表可以同时改变提示语句和JSON示例
         self.extraction_fields = [
-            {"key": "零件号", "label": "编号101"},
-            {"key": "长度", "label": "1050"},
-            {"key": "数量", "label": "1"},
+            {"key": "part_number", "label": "编号101", "display_name": "零件号"},
+            {"key": "length", "label": "1050", "display_name": "长度"},
+            {"key": "quantity", "label": "1", "display_name": "数量"},
         ]
     
     def convert_dwg_to_dxf(self, dwg_file_path):
@@ -64,7 +64,6 @@ class DXFTextToExcelConverter:
         Returns:
             dict: 转换结果，包含状态和DXF文件路径或错误信息
         """
-        start_time = time.time()
         try:
             # 检查DWG文件是否存在
             if not os.path.exists(dwg_file_path):
@@ -101,10 +100,6 @@ class DXFTextToExcelConverter:
 
             # 执行转换命令
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
-
-            # 记录转换过程信息
-            logger.debug("ODA 输出: %s", result.stdout)
-            logger.debug("ODA 错误: %s", result.stderr)
 
             if result.returncode == 0:
                 # 检查DXF文件是否生成
@@ -205,9 +200,8 @@ class DXFTextToExcelConverter:
         """
         使用LLM分析文本内容
         """
-        
         # 根据当前字段配置动态生成提示语句
-        labels = [field["label"] for field in self.extraction_fields]
+        labels = [field["display_name"] for field in self.extraction_fields]
         labels_str = "、".join(labels)
         instruction = f"请分析以下DXF文件中的文本信息，提取出{labels_str}等关键信息，并以JSON格式返回。"
         
@@ -223,8 +217,7 @@ class DXFTextToExcelConverter:
         messages = [
             {
                 "role": "user",
-                "content": f'''
-{instruction}
+                "content": f'''{instruction}
 文本内容：
 {text_content}
 
@@ -235,8 +228,7 @@ class DXFTextToExcelConverter:
 {json_fields_block}
         }}
     ]
-}}
-'''
+}}'''
             }
         ]
         
@@ -254,31 +246,23 @@ class DXFTextToExcelConverter:
     
     def parse_llm_response(self, response_data):
         """
-        解析LLM返回的结构化数据，只提取第一个有效的JSON块
+        解析LLM返回的结构化数据
         """
         try:
-            if isinstance(response_data, dict):
-                result = response_data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-            else:
-                result = str(response_data)
+            result = response_data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
             
-            # 处理可能的Markdown格式，只提取第一个代码块
-            if "```json" in result:
-                # 提取第一个```json和```之间的内容
-                start = result.find("```json") + 7
-                end = result.find("```", start)
-                if end == -1:  # 如果没有找到结束标记，使用字符串末尾
-                    result = result[start:]
-                else:
-                    result = result[start:end]
-            elif "```" in result:
-                # 提取第一个```和```之间的内容
-                start = result.find("```") + 3
-                end = result.find("```", start)
-                if end == -1:  # 如果没有找到结束标记，使用字符串末尾
-                    result = result[start:]
-                else:
-                    result = result[start:end]
+            # 使用正则表达式提取JSON部分
+            # 匹配 ```json 或 ``` 代码块中的内容
+            import re
+            json_match = re.search(r'```(?:json)?\s*({.*?})\s*```', result, re.DOTALL)
+            if json_match:
+                result = json_match.group(1)
+            else:
+                # 如果没有找到代码块，尝试找到第一个 { 和最后一个 } 之间的内容
+                first_brace = result.find('{')
+                last_brace = result.rfind('}')
+                if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                    result = result[first_brace:last_brace+1]
             
             result = result.strip()
             parsed = json.loads(result)
@@ -286,78 +270,13 @@ class DXFTextToExcelConverter:
             if "drawing_info" in parsed:
                 return {"drawing_info": parsed["drawing_info"]}
             else:
-                return parsed
+                return {}
         except Exception as e:
-            logger.error(f"解析LLM响应失败: {e}")
-            # 返回空数据结构
-            return {"drawing_info": []}  
-    def save_data_to_excel(self, data, output_path, dxf_filename):
-        """
-        将结构化数据保存为Excel文件（支持动态表头，并将数字以数值格式写入）
-        """
-        logger.info(f"正在保存Excel文件: {output_path}")
-        
-        wb = Workbook()
-        ws = wb.active
-        
-        # 设置标题
-        ws["A1"] = f"{dxf_filename}"
-        ws.merge_cells("A1:F3")
-        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-        ws["A1"].font = Font(size=14, bold=True)
-        
-        # 设置所有行的行高为25
-        # 先设置标题行（1-3行）
-        for row_num in range(1, 4):
-            ws.row_dimensions[row_num].height = 25
-        
-        # 动态生成表头
-        drawing_info = data.get("drawing_info", [])
-        if drawing_info and isinstance(drawing_info, list) and len(drawing_info) > 0:
-            # 从第一个数据项获取所有键作为表头
-            first_item = drawing_info[0]
-            headers = list(first_item.keys())
-            
-            # 设置表头（第4行）
-            for col_idx, header in enumerate(headers, 1):
-                ws.cell(row=4, column=col_idx, value=header)
-                ws.cell(row=4, column=col_idx).font = Font(bold=True)
-            ws.row_dimensions[4].height = 25  # 设置表头行高
-            
-            # 填充数据（从第5行开始）
-            for row_idx, item in enumerate(drawing_info, 5):
-                for col_idx, header in enumerate(headers, 1):
-                    cell_value = item.get(header, "")
-                    # 尝试将值转换为数字
-                    final_value = self._convert_to_number_if_possible(cell_value)
-                    ws.cell(row=row_idx, column=col_idx, value=final_value)
-                ws.row_dimensions[row_idx].height = 25  # 设置数据行行高
-        else:
-            # 如果没有数据，使用默认表头
-            headers = ["图号", "长度", "宽度", "厚度", "数量", "材料", "备注"]
-            for col_idx, header in enumerate(headers, 1):
-                ws.cell(row=4, column=col_idx, value=header)
-                ws.cell(row=4, column=col_idx).font = Font(bold=True)
-            ws.row_dimensions[4].height = 25  # 设置表头行高
-        
-        # 自动调整列宽
-        for column in ws.columns:
-            max_length = 0
-            column_letter = get_column_letter(column[0].column)
-            for cell in column:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = (max_length + 2)
-            ws.column_dimensions[column_letter].width = min(adjusted_width, 50)  # 最大宽度限制
-        
-        # 保存文件
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        wb.save(output_path)
-        logger.info(f"Excel文件已保存至: {output_path}")
-        return output_path
+            print(f"解析失败: {e}")
+            # 调试信息，帮助排查问题
+            print(f"LLM返回的原始内容: {result}")
+            return {}
+
     def _convert_to_number_if_possible(self, value):
         """
         如果可能，将字符串转换为数字（int或float）
@@ -369,6 +288,17 @@ class DXFTextToExcelConverter:
             # 尝试转换为整数
             if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
                 return int(value)
+            
+            # 处理Unicode数字字符（如①②③等）
+            try:
+                unicode_digits = {
+                    '①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5,
+                    '⑥': 6, '⑦': 7, '⑧': 8, '⑨': 9, '⑩': 10
+                }
+                if value in unicode_digits:
+                    return unicode_digits[value]
+            except:
+                pass
             
             # 尝试转换为浮点数
             try:
@@ -386,50 +316,121 @@ class DXFTextToExcelConverter:
         
         # 如果不能转换为数字，返回原始值
         return value
-    
-    def select_dxf_file(self):
+
+    def save_data_to_excel(self, data, output_path="output.xlsx", dxf_filename=None):
         """
-        弹出文件选择对话框选择DXF或DWG文件
+        将结构化数据保存为Excel文件
+        
+        Args:
+            data (dict): 结构化数据
+            output_path (str): 输出Excel文件路径
+            dxf_filename (str): 原始DXF文件名，用于填入Excel标题
         """
-        root = Tk()
+        # 防止文件名重复
+        base_path, ext = os.path.splitext(output_path)
+        counter = 1
+        final_output_path = output_path
+        while os.path.exists(final_output_path):
+            final_output_path = f"{base_path}_{counter}{ext}"
+            counter += 1
+        
+        wb = Workbook()
+        ws = wb.active
+        
+        # 设置标题
+        if dxf_filename:
+            ws["A1"] = dxf_filename
+            ws.merge_cells("A1:E1")
+            ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+            ws["A1"].font = Font(size=14, bold=True)
+            ws.row_dimensions[1].height = 25
+            start_row = 2
+        else:
+            start_row = 1
+        
+        rows = []
+        
+        if "drawing_info" in data and data["drawing_info"]:
+            # 创建显示名称映射
+            display_names = {field["key"]: field["display_name"] for field in self.extraction_fields}
+            
+            # 创建表头行（中文）
+            header_row = []
+            field_order = []  # 保持列顺序
+            
+            # 按预定义顺序添加字段
+            for field_config in self.extraction_fields:
+                field_key = field_config["key"]
+                header_row.append(display_names.get(field_key, field_key))
+                field_order.append(field_key)
+                
+            rows.append(header_row)
+            
+            # 填充数据行
+            for item in data["drawing_info"]:
+                data_row = []
+                for field in field_order:
+                    cell_value = item.get(field, "")
+                    # 尝试将值转换为数字
+                    final_value = self._convert_to_number_if_possible(cell_value)
+                    data_row.append(final_value)
+                rows.append(data_row)
+        
+        # 写入Excel
+        for i, row in enumerate(rows, start=start_row):
+            for j, value in enumerate(row, start=1):
+                ws.cell(row=i, column=j, value=value)
+            # 设置每行行高为25
+            ws.row_dimensions[i].height = 25
+        
+        # 调整列宽
+        for column in ws.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column_letter].width = min(adjusted_width, 50)  # 限制最大宽度
+        
+        wb.save(final_output_path)
+        print(f"Excel 文件已保存至: {final_output_path}")
+        return final_output_path
+
+    def select_dxf_files(self):
+        """
+        弹出文件选择窗口选择多个DXF或DWG文件
+        """
+        root = tk.Tk()
         root.withdraw()  # 隐藏主窗口
         root.attributes('-topmost', True)  # 确保对话框在最前面
         
-        file_path = filedialog.askopenfilename(
-            title="请选择DXF或DWG文件",
-            filetypes=[("CAD文件", "*.dxf *.dwg"), ("DXF文件", "*.dxf"), ("DWG文件", "*.dwg"), ("所有文件", "*.*")]
+        file_types = [
+            ("All supported files", "*.dxf *.dwg"),
+            ("DXF files", "*.dxf"),
+            ("DWG files", "*.dwg"),
+            ("All files", "*.*")
+        ]
+        
+        file_paths = filedialog.askopenfilenames(
+            title="请选择一个或多个DXF或DWG文件",
+            filetypes=file_types
         )
         
         root.destroy()  # 销毁tkinter根窗口
-        return file_path
-    
-    def select_output_folder(self):
+        return list(file_paths)
+
+    def process_dxf_file(self, dxf_file_path):
         """
-        弹出文件夹选择对话框选择输出文件夹
-        """
-        root = Tk()
-        root.withdraw()  # 隐藏主窗口
-        root.attributes('-topmost', True)  # 确保对话框在最前面
+        处理单个DXF或DWG文件
         
-        folder_path = filedialog.askdirectory(
-            title="请选择输出文件夹"
-        )
-        
-        root.destroy()  # 销毁tkinter根窗口
-        return folder_path
-    
-    def process_dxf_file(self, dxf_file_path=None, output_folder=None):
-        """
-        处理DXF或DWG文件的主流程
+        Args:
+            dxf_file_path (str): 输入文件路径（DXF或DWG）
         """
         try:
-            # 如果没有提供文件路径，弹出选择对话框
-            if not dxf_file_path:
-                dxf_file_path = self.select_dxf_file()
-                if not dxf_file_path:
-                    logger.info("未选择文件，程序退出")
-                    return None
-            
             # 检查文件类型，如果是DWG则先转换为DXF
             file_ext = os.path.splitext(dxf_file_path)[1].lower()
             original_file_path = dxf_file_path  # 保存原始文件路径用于确定输出目录
@@ -447,44 +448,69 @@ class DXFTextToExcelConverter:
             elif file_ext != '.dxf':
                 raise ValueError(f"不支持的文件格式: {file_ext}。仅支持DXF和DWG文件。")
             
-            # 如果没有提供输出文件夹，则使用源文件所在目录
-            if not output_folder:
-                # 使用原始文件（DXF或DWG）所在的目录作为输出目录
-                output_folder = os.path.dirname(original_file_path)
+            # 获取文件目录和文件名（不含扩展名）
+            file_dir = os.path.dirname(original_file_path)
+            file_name = os.path.splitext(os.path.basename(original_file_path))[0]
+            output_path = os.path.join(file_dir, f"{file_name}.xlsx")
             
             # 读取DXF文件中的文本
             dxf_data = self.read_dxf_texts(dxf_file_path)
             
-            # 提取文件名
-            dxf_filename = os.path.basename(dxf_file_path)
-            
             # 使用LLM分析文本内容
-            llm_result = self.analyze_text_with_llm(dxf_data['all_text_content'], dxf_filename)
-            
-            # 生成输出文件名
-            output_filename = f"{os.path.splitext(dxf_filename)[0]}_text_analysis.xlsx"
-            output_path = os.path.join(output_folder, output_filename)
+            llm_result = self.analyze_text_with_llm(dxf_data['all_text_content'], os.path.basename(dxf_file_path))
             
             # 保存到Excel
-            excel_path = self.save_data_to_excel(llm_result, output_path, dxf_filename)
-            
-            logger.info(f"处理完成！Excel文件已保存至: {excel_path}")
-            return excel_path
+            self.save_data_to_excel(llm_result, output_path, os.path.basename(original_file_path))
         except Exception as e:
-            logger.error(f"处理过程中发生错误: {str(e)}")
-            raise
+            print("错误:", str(e))
+
+    def batch_process_files(self, file_paths):
+        """
+        批量处理多个文件，每个文件生成单独的Excel文件
+        
+        Args:
+            file_paths (list): 文件路径列表
+        """
+        if not file_paths:
+            print("未选择任何文件")
+            return
+        
+        for i, file_path in enumerate(file_paths, 1):
+            print(f"\n正在处理第 {i}/{len(file_paths)} 个文件: {file_path}")
+            
+            if not os.path.exists(file_path):
+                print(f"警告: 文件 '{file_path}' 不存在，跳过处理")
+                continue
+                
+            try:
+                self.process_dxf_file(file_path)
+                print(f"完成处理: {file_path}")
+            except Exception as e:
+                print(f"处理文件 '{file_path}' 时出现错误: {e}")
+
+# 创建全局转换器实例
+converter = DXFTextToExcelConverter()
+
+def main():
+    # 直接选择多个文件进行批量处理
+    file_paths = converter.select_dxf_files()
+    
+    if not file_paths:
+        print("未选择文件，程序退出")
+        sys.exit(0)
+        
+    try:
+        converter.batch_process_files(file_paths)
+        print("\n所有文件处理完成！")
+    except Exception as e:
+        print(f"处理过程中出现错误: {e}")
+
 if __name__ == "__main__":
     try:
-        converter = DXFTextToExcelConverter()
         print("欢迎使用CAD文件文字信息提取与Excel导出工具")
         print("该工具将读取DXF或DWG文件中的文字信息，使用LLM分析并导出到Excel文件")
         print("支持自动转换DWG文件为DXF格式")
-        
-        # 处理文件
-        excel_file = converter.process_dxf_file()
-        
-        if excel_file:
-            print(f"\n✅ 处理完成！\nExcel文件已保存至: {excel_file}")
+        main()
     except Exception as e:
         print(f"❌ 处理失败: {str(e)}")
         sys.exit(1)
