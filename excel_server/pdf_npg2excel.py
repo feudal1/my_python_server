@@ -1,5 +1,3 @@
-# npg2excel.py
-# vlm_png_to_excel.py
 import json
 import os
 from PIL import Image
@@ -13,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog
 import logging
 import fitz  # PyMuPDF
+import re
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,10 +33,6 @@ class UniversalFileToExcelConverter:
             {"key": "drawing_number", "label": "ABC123", "display_name": "图号"},
             {"key": "specification", "label": "PL厚度*宽度*长度", "display_name": "规格"},
             
-            {"key": "thickness", "label": "10", "display_name": "厚度(mm)"},
-            {"key": "length", "label": "1200", "display_name": "长度(mm)"},
-            {"key": "width", "label": "800", "display_name": "宽度(mm)"},
-
             {"key": "quantity", "label": "5", "display_name": "数量"},
             {"key": "material", "label": "不锈钢", "display_name": "材料"},
           
@@ -111,6 +106,45 @@ class UniversalFileToExcelConverter:
         except Exception as e:
             print(f"解析失败: {e}")
             return {}
+
+    def _convert_specification_format(self, value):
+        """
+        转换规格格式，添加PL前缀（如果没有）并将x替换为*，去除空格，保留一位小数
+        """
+        if isinstance(value, str):
+            # 去除首尾空格
+            value = value.strip()
+            
+            # 去除所有空格
+            value = value.replace(' ', '')
+            
+            # 替换所有的"x"为"*"
+            value = value.replace('x', '*').replace('X', '*')
+            
+            # 处理数字，保留一位小数
+            # 使用正则表达式找到所有数字部分并格式化
+            def format_number(match):
+                try:
+                    num = float(match.group())
+                    # 如果是整数，不保留小数点
+                    if num.is_integer():
+                        return str(int(num))
+                    else:
+                        # 保留一位小数
+                        return f"{num:.1f}"
+                except:
+                    return match.group()
+            
+            # 匹配数字（包括小数）
+            value = re.sub(r'\d+\.?\d*', format_number, value)
+            
+            # 如果不以PL开头，则添加PL前缀
+            if not value.upper().startswith('PL'):
+                value = 'PL' + value
+                
+            return value
+        
+        return value
 
     def _convert_to_number_if_possible(self, value):
         """
@@ -224,6 +258,9 @@ class UniversalFileToExcelConverter:
                 data_row = []
                 for field in field_order:
                     cell_value = item.get(field, "")
+                    # 特殊处理 specification 字段
+                    if field == "specification":
+                        cell_value = self._convert_specification_format(cell_value)
                     # 尝试将值转换为数字
                     final_value = self._convert_to_number_if_possible(cell_value)
                     data_row.append(final_value)
