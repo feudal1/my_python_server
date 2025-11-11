@@ -1,10 +1,8 @@
 import pandas as pd
 import ezdxf
 from ezdxf.enums import TextEntityAlignment
-import math
 import os
 import re
-import random
 from tkinter import Tk, simpledialog, messagebox, Canvas, Label, Frame, Button, Scrollbar, HORIZONTAL, VERTICAL
 from tkinter.filedialog import askopenfilename
 import threading
@@ -418,7 +416,7 @@ class PackingVisualizer:
                 self.root.update()
 
 # ==============================
-# 装箱算法（增强版：支持退火和可视化）
+# 装箱算法（简化版：只保留贪心算法）
 # ==============================
 class VisualBinPacking:
     def __init__(self, width, height, visualizer=None):
@@ -427,9 +425,8 @@ class VisualBinPacking:
         self.effective_width = width - 2 * MARGIN
         self.effective_height = height - 2 * MARGIN
         self.bins = []
-        self.visualizer = visualizer  # 先设置visualizer属性
-        self.current_bin_index = 0
-        self.add_new_bin()  # 再调用add_new_bin
+        self.visualizer = visualizer
+        self.add_new_bin()
 
     def add_new_bin(self):
         self.bins.append({
@@ -585,114 +582,6 @@ class VisualBinPacking:
                     if self.visualizer:
                         self.visualizer.update_info(error_msg)
 
-    # === 新增：退火相关方法 ===
-    def reset(self):
-        self.bins = []
-        self.add_new_bin()
-        self.current_bin_index = 0
-
-    def get_total_utilization(self):
-        total_used = sum(b['used_area'] for b in self.bins)
-        total_avail = sum(b['total_area'] for b in self.bins)
-        return total_used / total_avail if total_avail > 0 else 0
-
-    def clear_visualization(self, bin_indices=None):
-        """清除可视化内容"""
-        if self.visualizer:
-            self.visualizer.clear_visualization(bin_indices)
-
-    def sa_pack(self, parts, init_temp=50, final_temp=0.1, cool_rate=0.95, max_iter_per_temp=10):
-        """
-        使用模拟退火优化零件顺序和旋转状态
-        """
-        if self.visualizer:
-            self.visualizer.wait_for_start()
-            
-        # Step 1: 用贪心获得初始解
-        self.reset()
-        self.clear_visualization()  # 清除之前的可视化内容
-        self.pack(parts)
-        best_util = self.get_total_utilization()
-        best_seq = parts.copy()
-        current_seq = parts.copy()
-        T = init_temp
-
-        print(f"初始贪心利用率: {best_util:.2%}")
-
-        while T > final_temp:
-            improved = False
-            for _ in range(max_iter_per_temp):
-                # 扰动：随机交换两个零件 或 随机翻转一个零件的旋转标记
-                new_seq = current_seq.copy()
-                if random.random() < 0.5 and len(new_seq) > 1:
-                    i, j = random.sample(range(len(new_seq)), 2)
-                    new_seq.iloc[i], new_seq.iloc[j] = new_seq.iloc[j].copy(), new_seq.iloc[i].copy()
-                else:
-                    idx = random.randint(0, len(new_seq) - 1)
-                    # 添加 'rotated' 列（如果没有）
-                    if 'rotated' not in new_seq.columns:
-                        new_seq['rotated'] = False
-                    new_seq.loc[new_seq.index[idx], 'rotated'] = not new_seq.loc[new_seq.index[idx], 'rotated']
-
-                # 重新打包前清除可视化内容
-                self.reset()
-                self.clear_visualization()  # 清除之前的可视化内容
-                self._pack_with_rotation(new_seq)
-                new_util = self.get_total_utilization()
-
-                delta = new_util - best_util  # 我们要最大化利用率
-                if delta > 0 or (T > 0 and random.random() < math.exp(delta / T)):
-                    current_seq = new_seq
-                    if new_util > best_util:
-                        best_util = new_util
-                        best_seq = new_seq.copy()
-                        improved = True
-
-            T *= cool_rate
-            if improved:
-                info_text = f"降温至 {T:.2f}，当前最优利用率: {best_util:.2%}"
-                print(info_text)
-                if self.visualizer:
-                    self.visualizer.update_info(info_text)
-
-        # 最终用最优序列打包前清除可视化内容
-        self.reset()
-        self.clear_visualization()  # 清除之前的可视化内容
-        self._pack_with_rotation(best_seq)
-        completion_msg = f"✅ 退火完成！最终利用率: {best_util:.2%}"
-        print(completion_msg)
-        if self.visualizer:
-            self.visualizer.update_info(completion_msg)
-        return best_util
-
-    def _pack_with_rotation(self, parts):
-        """根据 'rotated' 列决定是否旋转"""
-        parts = parts.copy()
-        if 'rotated' not in parts.columns:
-            parts['rotated'] = False
-        parts['area'] = parts['OBB长度'] * parts['OBB宽度']
-        parts = parts.sort_values('area', ascending=False).reset_index(drop=True)
-
-        total_rows = len(parts)
-        for idx, row in parts.iterrows():
-            drawing_number = str(row['图号'])
-            length, width, qty = row['OBB长度'], row['OBB宽度'], row['数量']
-            rotated_flag = bool(row.get('rotated', False))
-            for i in range(qty):
-                part_id = f"Part_{idx}_{i+1}"
-                w, h = (width, length) if rotated_flag else (length, width)
-                if w <= self.effective_width and h <= self.effective_height:
-                    self.place_rect(w, h, drawing_number, part_id, rotated=rotated_flag)
-                else:
-                    # 尝试不旋转
-                    if length <= self.effective_width and width <= self.effective_height:
-                        self.place_rect(length, width, drawing_number, part_id, rotated=False)
-                    else:
-                        warning_msg = f"警告：零件 {drawing_number} 无法放入板材"
-                        print(warning_msg)
-                        if self.visualizer:
-                            self.visualizer.update_info(warning_msg)
-
 # ==============================
 # 创建 DXF 输出（不变）
 # ==============================
@@ -737,7 +626,7 @@ def create_individual_dxf(bins, base_output_dir, sheet_width, sheet_height, marg
     return saved_files_info
 
 # ==============================
-# 主程序
+# 主程序（简化版）
 # ==============================
 if __name__ == "__main__":
     print(f"当前板材尺寸: {SHEET_WIDTH}mm x {SHEET_HEIGHT}mm")
@@ -749,15 +638,10 @@ if __name__ == "__main__":
     # 创建支持可视化的装箱对象
     packer = VisualBinPacking(SHEET_WIDTH, SHEET_HEIGHT, visualizer)
 
-    # ========== 选择是否启用退火 ==========
-    use_sa = messagebox.askyesno("优化选项", "是否启用模拟退火优化？\n（推荐：能进一步提升利用率）")
-
     # 在新线程中执行排版任务，避免阻塞GUI
     def run_packing():
-        if use_sa:
-            packer.sa_pack(df, init_temp=30, final_temp=0.5, cool_rate=0.93, max_iter_per_temp=8)
-        else:
-            packer.pack(df)
+        # 直接使用贪心算法进行排版
+        packer.pack(df)
 
         # 保存结果
         saved_files = create_individual_dxf(packer.bins, output_dir, SHEET_WIDTH, SHEET_HEIGHT, MARGIN)
