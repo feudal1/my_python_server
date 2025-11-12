@@ -14,7 +14,7 @@ import time
 def input_sheet_size():
     root = Tk()
     root.withdraw()
-    width = simpledialog.askinteger("板材尺寸设置", "请输入板材宽度 (mm):", initialvalue=1500, minvalue=100, maxvalue=50000)
+    width = simpledialog.askinteger("板材尺寸设置", "请输入板材宽度 (mm):", initialvalue=1490, minvalue=100, maxvalue=50000)
     if width is None:
         messagebox.showinfo("提示", "未输入板材宽度,程序将使用默认值 1200mm")
         width = 1200
@@ -143,6 +143,7 @@ class PackingVisualizer:
         self.packing_started = False
         self.bins_data = []  # 存储所有板材数据
         self.packing_completed = False  # 排版是否完成
+        self.packer = None  # 用于存储packer对象引用
         
     def draw_initial_layout(self):
         """绘制初始布局"""
@@ -343,9 +344,52 @@ class PackingVisualizer:
 
     def export_dxf(self):
         """导出DXF文件"""
-        # 这个方法将在排版完成后由用户手动触发
+        # 在新线程中执行导出操作，避免阻塞GUI
+        self.export_dxf_button.config(state="disabled")
         self.update_info("正在导出DXF文件...")
-        # 实际的导出操作将在主程序中完成
+        
+        export_thread = threading.Thread(target=self._export_dxf_thread)
+        export_thread.daemon = True
+        export_thread.start()
+
+    def _export_dxf_thread(self):
+        """在单独线程中执行DXF导出"""
+        try:
+            if self.packer is None:
+                self.root.after(0, lambda: self.update_info("导出失败: 未找到排版数据"))
+                self.root.after(0, lambda: self.export_dxf_button.config(state="normal"))
+                return
+                
+            # 获取排版数据
+            bins_data = self.packer.bins
+            
+            # 执行导出操作
+            saved_files = create_individual_dxf(bins_data, output_dir, self.sheet_width, self.sheet_height, MARGIN)
+            
+            # 统计信息
+            total_parts = sum(len(b['rects']) for b in bins_data)
+            total_bins = len(bins_data)
+            total_used_area = sum(b['used_area'] for b in bins_data)
+            effective_sheet_area = (self.sheet_width - 2*MARGIN) * (self.sheet_height - 2*MARGIN)
+            overall_utilization = total_used_area / (total_bins * effective_sheet_area) * 100 if total_bins > 0 and effective_sheet_area > 0 else 0
+
+            completion_info = (
+                f"✅ DXF导出完成！\n"
+                f"总共导出板材: {total_bins} 张\n"
+                f"总共零件数: {total_parts} 个\n"
+                f"整体材料利用率: {overall_utilization:.2f}%\n"
+            )
+            
+            # 在主线程中更新GUI
+            self.root.after(0, lambda: self.update_info(completion_info))
+            self.root.after(0, lambda: self.export_dxf_button.config(state="normal"))
+            
+            print(f"DXF文件已保存到: {os.path.dirname(saved_files[0]['file_path']) if saved_files else '未知位置'}")
+        except Exception as e:
+            error_msg = f"导出失败: {str(e)}"
+            print(error_msg)
+            self.root.after(0, lambda: self.update_info(error_msg))
+            self.root.after(0, lambda: self.export_dxf_button.config(state="normal"))
 
     def clear_visualization(self, bin_indices=None):
         """清除指定板材的可视化内容，如果不指定则清除所有"""
@@ -637,6 +681,9 @@ if __name__ == "__main__":
     
     # 创建支持可视化的装箱对象
     packer = VisualBinPacking(SHEET_WIDTH, SHEET_HEIGHT, visualizer)
+    
+    # 将packer对象引用传递给visualizer
+    visualizer.packer = packer
 
     # 在新线程中执行排版任务，避免阻塞GUI
     def run_packing():

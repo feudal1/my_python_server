@@ -44,6 +44,70 @@ def get_points_from_entities(entities):
                 points.append(tuple(start))
                 points.append(tuple(end))
                 print(f"找到线段 {len(points)//2}: 起点({start[0]:.2f}, {start[1]:.2f}), 终点({end[0]:.2f}, {end[1]:.2f})")
+            elif entity.ObjectName == "AcDbPolyline":
+                # 处理多段线（包括带圆弧的多段线）
+                vertex_count = entity.Coordinates.count
+                coords = entity.Coordinates
+                
+                # 获取多段线的顶点
+                polyline_points = []
+                for j in range(0, vertex_count, 2):
+                    if j + 1 < vertex_count:
+                        x, y = coords[j], coords[j+1]
+                        polyline_points.append((x, y))
+                
+                # 如果是封闭多段线，移除重复点
+                if entity.Closed and len(polyline_points) > 1:
+                    polyline_points.pop()  # 移除最后一个与第一个重合的点
+                
+                points.extend(polyline_points)
+                print(f"找到多段线 {i+1}: 共{len(polyline_points)}个顶点")
+                
+                # 对于带圆弧的多段线，我们还可以采样圆弧部分以获得更精确的边界
+                for j in range(entity.Coordinates.count // 2 - 1):
+                    if hasattr(entity, 'GetBulge') and entity.GetBulge(j) != 0:
+                        # 如果存在凸度（bulge），表示这是一段圆弧
+                        bulge = entity.GetBulge(j)
+                        if j*2+3 < entity.Coordinates.count:
+                            start_point = (coords[j*2], coords[j*2+1])
+                            end_point = (coords[j*2+2], coords[j*2+3])
+                            # 可以在这里添加对圆弧的采样点，以提高精度
+                            # 为简化起见，暂时只取端点，实际应用中可增加采样点
+                            
+            elif entity.ObjectName == "AcDbArc":
+                # 处理圆弧对象，将其拆分成20个点
+                center = entity.Center[:2]
+                radius = entity.Radius
+                start_angle = entity.StartAngle
+                end_angle = entity.EndAngle
+                
+                # 确保角度范围正确
+                if end_angle < start_angle:
+                    end_angle += 2 * math.pi
+                    
+                # 在圆弧上均匀采样20个点
+                for k in range(20):
+                    angle = start_angle + (end_angle - start_angle) * k / 19
+                    x = center[0] + radius * math.cos(angle)
+                    y = center[1] + radius * math.sin(angle)
+                    points.append((x, y))
+                    
+                print(f"找到圆弧 {i+1}: 采样20个点")
+                
+            elif entity.ObjectName == "AcDbCircle":
+                # 处理圆对象，将其拆分成40个点
+                center = entity.Center[:2]
+                radius = entity.Radius
+                
+                # 在圆上均匀采样40个点
+                for k in range(40):
+                    angle = 2 * math.pi * k / 40
+                    x = center[0] + radius * math.cos(angle)
+                    y = center[1] + radius * math.sin(angle)
+                    points.append((x, y))
+                    
+                print(f"找到圆 {i+1}: 采样40个点")
+                
             else:
                 print(f"跳过非线段对象 {i+1}: {entity.ObjectName}")
         except Exception as e:

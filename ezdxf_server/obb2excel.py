@@ -11,7 +11,7 @@ import sys
 
 def get_points_from_dxf(doc):
     """
-    从DXF文档中提取线段端点
+    从DXF文档中提取线段端点、圆弧采样点、多段线顶点和圆的采样点
     """
     points = []
     modelspace = doc.modelspace()
@@ -23,7 +23,44 @@ def get_points_from_dxf(doc):
             end = (entity.dxf.end.x, entity.dxf.end.y)
             points.append(start)
             points.append(end)
-    
+        elif entity.dxftype() == 'ARC':
+            # 将圆弧拆分成20个点
+            center = (entity.dxf.center.x, entity.dxf.center.y)
+            radius = entity.dxf.radius
+            start_angle = entity.dxf.start_angle
+            end_angle = entity.dxf.end_angle
+            
+            # 确保角度范围正确
+            if end_angle < start_angle:
+                end_angle += 360
+                
+            # 在圆弧上均匀采样20个点
+            for i in range(20):
+                angle = start_angle + (end_angle - start_angle) * i / 19
+                x = center[0] + radius * math.cos(math.radians(angle))
+                y = center[1] + radius * math.sin(math.radians(angle))
+                points.append((x, y))
+        elif entity.dxftype() == 'CIRCLE':
+            # 将圆拆分成40个点（更精细）
+            center = (entity.dxf.center.x, entity.dxf.center.y)
+            radius = entity.dxf.radius
+            
+            for i in range(40):
+                angle = 360 * i / 40
+                x = center[0] + radius * math.cos(math.radians(angle))
+                y = center[1] + radius * math.sin(math.radians(angle))
+                points.append((x, y))
+        elif entity.dxftype() == 'LWPOLYLINE':
+            # 轻量多段线，顶点存储在 `entity.vertices` 中
+            with entity.points() as vertices:
+                for vertex in vertices:
+                    points.append((vertex[0], vertex[1]))
+        elif entity.dxftype() == 'POLYLINE':
+            # 传统多段线，需要遍历子实体
+            for vertex in entity.vertices:
+                point = vertex.dxf.location
+                points.append((point.x, point.y))
+
     # 去除重复点
     points = list(set(points))
     return points
