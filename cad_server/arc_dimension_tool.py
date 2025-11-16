@@ -2,6 +2,8 @@
 from pyautocad import Autocad, APoint
 import math
 
+import time
+
 def get_selected_arcs(acad, doc):
     """
     获取用户选择的圆弧对象
@@ -17,8 +19,9 @@ def get_selected_arcs(acad, doc):
         # 提示用户选择对象
         print("请选择圆弧对象...")
         
-        # 创建临时选择集
-        selection_set = doc.SelectionSets.Add("ArcSelection")
+        # 使用时间戳创建唯一的选择集名称
+        selection_set_name = f"ArcSelection_{int(time.time())}"
+        selection_set = doc.SelectionSets.Add(selection_set_name)
         selection_set.SelectOnScreen()
         
         # 筛选出圆弧对象
@@ -144,7 +147,7 @@ def ensure_layer_exists(doc, layer_name):
         print(f"创建或获取图层 {layer_name} 时出错: {e}")
         return None
 
-def add_chord_dimension(doc, arc_props, index):
+def add_chord_dimension(doc, arc_props, index, offset_distance=200, text_height=50):
     """
     添加弦长标注
     
@@ -152,6 +155,8 @@ def add_chord_dimension(doc, arc_props, index):
         doc: AutoCAD文档对象
         arc_props: 圆弧属性字典
         index: 圆弧索引号
+        offset_distance: 标注偏移距离，默认为200
+        text_height: 文字高度，默认为50
     
     Returns:
         标注对象或None
@@ -180,8 +185,7 @@ def add_chord_dimension(doc, arc_props, index):
             perp_x = -unit_y
             perp_y = unit_x
             
-            # 标注点（弦中点向下偏移100单位）
-            offset_distance = 100  # 修改为100
+            # 标注点（弦中点向下偏移指定单位）
             dim_x = chord_mid_x + perp_x * offset_distance
             dim_y = chord_mid_y + perp_y * offset_distance
             
@@ -195,8 +199,8 @@ def add_chord_dimension(doc, arc_props, index):
             chord_length_value = round(arc_props['chord_length'])
             chord_length_dim.TextOverride = f"弦长={chord_length_value}"
             
-            # 设置文字大小为50
-            chord_length_dim.TextHeight = 50
+            # 设置文字大小
+            chord_length_dim.TextHeight = text_height
             
             # 控制文字位置
             chord_length_dim.TextMovement = 2  # 固定文字位置
@@ -212,7 +216,7 @@ def add_chord_dimension(doc, arc_props, index):
     
     return None
 
-def add_sagitta_dimension(doc, arc_props, index):
+def add_sagitta_dimension(doc, arc_props, index, offset_distance=50, text_height=50):
     """
     添加矢高标注
     
@@ -220,6 +224,8 @@ def add_sagitta_dimension(doc, arc_props, index):
         doc: AutoCAD文档对象
         arc_props: 圆弧属性字典
         index: 圆弧索引号
+        offset_distance: 标注偏移距离，默认为50
+        text_height: 文字高度，默认为50
     
     Returns:
         标注对象或None
@@ -242,8 +248,7 @@ def add_sagitta_dimension(doc, arc_props, index):
             unit_x = to_center_x / to_center_length
             unit_y = to_center_y / to_center_length
             
-            # 矢高标注点（固定偏移50）
-            offset_distance = 50  # 保持50
+            # 矢高标注点（固定偏移指定距离）
             dim_x = chord_mid_x + unit_x * offset_distance
             dim_y = chord_mid_y + unit_y * offset_distance
             
@@ -260,8 +265,8 @@ def add_sagitta_dimension(doc, arc_props, index):
             sagitta_value = round(arc_props['sagitta'])
             sagitta_dim.TextOverride = f"矢高={sagitta_value}"
             
-            # 设置文字大小为50
-            sagitta_dim.TextHeight = 50
+            # 设置文字大小
+            sagitta_dim.TextHeight = text_height
             
             # 设置图层为"矢高标注"
             sagitta_dim.Layer = "矢高标注"
@@ -278,7 +283,7 @@ def add_sagitta_dimension(doc, arc_props, index):
     
     return None
 
-def add_radius_dimension(doc, arc_props, index):
+def add_radius_dimension(doc, arc_props, index, offset_distance=900, text_height=50):
     """
     添加半径标注
     
@@ -286,6 +291,8 @@ def add_radius_dimension(doc, arc_props, index):
         doc: AutoCAD文档对象
         arc_props: 圆弧属性字典
         index: 圆弧索引号
+        offset_distance: 标注偏移距离，默认为900
+        text_height: 文字高度，默认为50
     
     Returns:
         标注对象或None
@@ -300,16 +307,15 @@ def add_radius_dimension(doc, arc_props, index):
         # 在弧上选择一个点作为半径标注的引线点（使用中点）  
         mid_arc_point = APoint(arc_props['mid_arc_point'][0], arc_props['mid_arc_point'][1])  
         
-        # 标注点放在从圆心到弧点延长线上的位置（固定偏移50）
-        offset_distance = 50  # 保持50
-        
         # 添加半径标注
         radius_dim = doc.ModelSpace.AddDimRadial(center_point, mid_arc_point, offset_distance)  
         radius_value = round(arc_props['radius'])  
         radius_dim.TextOverride = f"R{radius_value}"  
         
-        # 设置文字大小为50
-        radius_dim.TextHeight = 50
+        # 设置文字大小
+        radius_dim.TextHeight = text_height
+        
+   
         
         # 分配到半径标注图层
         radius_dim.Layer = "半径标注"
@@ -335,6 +341,13 @@ def main():
         print("无法连接到 AutoCAD:", e)
         return
     
+    # 定义标注偏移参数，在此处统一修改
+    CHORD_OFFSET = 300    # 弦长标注偏移距离
+    SAGITTA_OFFSET = 950   # 矢高标注偏移距离
+    RADIUS_OFFSET = -900    # 半径标注偏移距离
+    
+    TEXT_HEIGHT = 150      # 文字高度统一设置
+    
     try:
         # 获取用户选择的圆弧
         selected_arcs = get_selected_arcs(acad, doc)
@@ -357,13 +370,13 @@ def main():
                 continue
             
             # 添加弦长标注
-            chord_dim = add_chord_dimension(doc, props, i)
+            chord_dim = add_chord_dimension(doc, props, i, CHORD_OFFSET, TEXT_HEIGHT)
             
             # 添加矢高标注
-            sagitta_dim = add_sagitta_dimension(doc, props, i)
+            sagitta_dim = add_sagitta_dimension(doc, props, i, SAGITTA_OFFSET, TEXT_HEIGHT)
             
             # 添加半径标注
-            radius_dim = add_radius_dimension(doc, props, i)
+            radius_dim = add_radius_dimension(doc, props, i, RADIUS_OFFSET, TEXT_HEIGHT)
             
             # 统计成功添加的标注
             dims_added = sum([1 for dim in [chord_dim, sagitta_dim, radius_dim] if dim is not None])

@@ -126,6 +126,8 @@ def main():
         # 连接到正在运行的 AutoCAD    
         acad = Autocad(create_if_not_exists=True)    
         print(f"成功连接到 AutoCAD 文档: {acad.doc.Name}")    
+        acad.doc.SetVariable("DIMTXT", 150) 
+        acad.doc.SetVariable("DIMDEC", 0)
     except Exception as e:    
         print(f"无法连接到 AutoCAD: {e}")    
         return    
@@ -156,7 +158,7 @@ def main():
         print(f"设置新的文字高度为: {text_height}")    
             
         # 修改标注的文字高度、颜色、图层颜色和文字内容(绿色=3)    
-        modified_count = modify_dimension_properties(acad, dimensions, text_height=text_height, color=3)    
+        modified_count = modify_dimension_properties(acad, dimensions, text_height=text_height, color=7)    
             
         print(f"成功修改了 {modified_count} 个标注的文字高度、颜色和文字内容")    
             

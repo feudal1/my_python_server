@@ -23,7 +23,7 @@
                         SUBSTITUTE(
                             SUBSTITUTE(
                                 SUBSTITUTE(
-                                    SUBSTITUTE(D2,"x","*"),
+                                    SUBSTITUTE(C3,"x","*"),
                                 "X","*"),
                             "mm",""),
                         "-","*"),
