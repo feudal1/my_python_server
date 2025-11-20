@@ -252,7 +252,7 @@ def main():
         doc.Utility.Prompt(f"\n总共成功修改了 {success_count} 个圆弧的长度\n")
         
     except Exception as e:
-        doc.Utility.Prompt(f"处理过程中发生错误: {e}\n")
+        print(f"处理过程中发生错误: {e}\n")
 
 
 if __name__ == "__main__":

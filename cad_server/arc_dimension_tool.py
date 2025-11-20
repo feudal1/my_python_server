@@ -340,13 +340,13 @@ def main():
     except Exception as e:
         print("无法连接到 AutoCAD:", e)
         return
-    
+    unit=1
     # 定义标注偏移参数，在此处统一修改
-    CHORD_OFFSET = 300    # 弦长标注偏移距离
-    SAGITTA_OFFSET = 950   # 矢高标注偏移距离
-    RADIUS_OFFSET = -900    # 半径标注偏移距离
+    CHORD_OFFSET = 300*unit    # 弦长标注偏移距离
+    SAGITTA_OFFSET = 950   *unit# 矢高标注偏移距离
+    RADIUS_OFFSET = -900    *unit# 半径标注偏移距离
     
-    TEXT_HEIGHT = 150      # 文字高度统一设置
+    TEXT_HEIGHT = 150      *unit# 文字高度统一设置
     
     try:
         # 获取用户选择的圆弧

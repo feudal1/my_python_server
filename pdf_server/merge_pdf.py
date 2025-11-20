@@ -155,7 +155,7 @@ class PDFMergerApp:
                 
                 messagebox.showinfo("成功", f"PDF合并完成！\n保存路径：{output_path}")
             
-        except Exception as e:
+        except Exception as e: 
             messagebox.showerror("错误", f"合并过程中出现错误：\n{str(e)}")
     
     def open_file(self, file_path):

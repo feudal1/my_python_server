@@ -6,6 +6,13 @@ from openpyxl import Workbook
 import os
 import uuid
 
+# 定义全局图层名称常量
+OUTER_ARC_LAYER = "外弧"
+INNER_ARC_LAYER = "内弧"
+OUTER_CIRCLE_LAYER = "外圆"
+INNER_CIRCLE_LAYER = "内圆"
+NUMBERING_LAYER = "编号"
+
 def get_all_objects_from_selection(acad, doc):
     """
     一次性获取所有选中的圆弧和圆对象
@@ -69,17 +76,17 @@ def separate_objects_by_layer(arcs, circles):
     # 处理圆弧
     for arc in arcs:
         layer_name = arc.Layer
-        if layer_name == "外弧":
+        if layer_name == OUTER_ARC_LAYER:
             outer_objects.append(('arc', arc))
-        elif layer_name == "内弧":
+        elif layer_name == INNER_ARC_LAYER:
             inner_objects.append(('arc', arc))
     
     # 处理圆
     for circle in circles:
         layer_name = circle.Layer
-        if layer_name == "外圆":
+        if layer_name == OUTER_CIRCLE_LAYER:
             outer_objects.append(('circle', circle))
-        elif layer_name == "内圆":
+        elif layer_name == INNER_CIRCLE_LAYER:
             inner_objects.append(('circle', circle))
     
     print(f"分离结果: 外对象 {len(outer_objects)} 个, 内对象 {len(inner_objects)} 个")
@@ -208,7 +215,7 @@ def add_number_to_object(acad, doc, obj_type, obj, number):
             text_width = radius * 0.5  # 设置文本宽度为半径的一半
             text_obj = doc.ModelSpace.AddMText(text_point, text_width, str(number))
             text_obj.Height = radius * 0.08  # 字体大小为半径的0.08倍
-            text_obj.Layer = "编号"
+            text_obj.Layer = NUMBERING_LAYER
               
             print(f"已为圆弧添加序号: {number}")
             
@@ -228,7 +235,7 @@ def add_number_to_object(acad, doc, obj_type, obj, number):
             text_width = radius * 0.5  # 设置文本宽度为半径的一半
             text_obj = doc.ModelSpace.AddMText(text_point, text_width, str(number))
             text_obj.Height = 500 # 字体大小为半径的0.08倍
-            text_obj.Layer = "编号"
+            text_obj.Layer = NUMBERING_LAYER
             
             print(f"已为圆添加序号: {number}")
             
@@ -401,7 +408,7 @@ def main():
         print(f"DXF文件目录: {dxf_directory}")
         
         # 确保"编号"图层存在（只需执行一次）
-        ensure_layer_exists(doc, "编号")
+        ensure_layer_exists(doc, NUMBERING_LAYER)
         
         # 一次性选择所有圆弧和圆对象
         all_arcs, all_circles = get_all_objects_from_selection(acad, doc)
@@ -428,7 +435,6 @@ def main():
                 add_number_to_object(acad, doc, obj_type, obj, index)
             
      
-        
         # 导出配对数据到Excel
         if paired_objects:
             export_paired_object_data_to_excel(paired_objects, dxf_directory)
