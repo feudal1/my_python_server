@@ -295,18 +295,44 @@ def get_oriented_bounding_box_approx(points):
         'center': center_original
     }
 
-def draw_bounding_box(acad, box, color_index):
-    """在AutoCAD中绘制包围框
+def ensure_layer_exists(acad, layer_name):
+    """确保图层存在，如果不存在则创建它
+    :param acad: Autocad实例
+    :param layer_name: 图层名称
+    :return: 图层对象
+    """
+    try:
+        # 尝试获取现有图层
+        layers = acad.doc.Layers
+        layer = layers.Item(layer_name)
+        return layer
+    except:
+        # 图层不存在，创建新图层
+        try:
+            layers = acad.doc.Layers
+            new_layer = layers.Add(layer_name)
+            return new_layer
+        except Exception as e:
+            print(f"创建图层 '{layer_name}' 时出错: {e}")
+            return None
+
+def draw_bounding_box_with_text(acad, box, color_index, width=None, height=None):
+    """在AutoCAD中绘制包围框并在旁边添加长宽数字文本
     
     :param acad: Autocad实例
     :param box: 包围框字典，包含corners列表
     :param color_index: AutoCAD颜色索引 (1=红色, 3=绿色, 5=蓝色等)
+    :param width: 包围框宽度（可选）
+    :param height: 包围框高度（可选）
     """
     if not box or 'corners' not in box:
         return None
     
     corners = box['corners']
     model = acad.model
+    
+    # 确保"obb"图层存在
+    obb_layer = ensure_layer_exists(acad, "obb")
     
     # 绘制四条边，形成闭合矩形
     lines = []
@@ -315,7 +341,37 @@ def draw_bounding_box(acad, box, color_index):
         p2 = APoint(corners[(i+1)%4][0], corners[(i+1)%4][1], 0)
         line = model.AddLine(p1, p2)
         line.Color = color_index
+        # 如果图层创建成功，将线条也放到obb图层
+        if obb_layer:
+            try:
+                line.Layer = "obb"
+            except:
+                pass  # 如果设置图层失败，保持默认图层
         lines.append(line)
+    
+    # 如果提供了宽度和高度，则添加文本标注
+    if width is not None and height is not None:
+        # 计算包围框的中心点
+        center_x = sum(corner[0] for corner in corners) / 4
+        center_y = sum(corner[1] for corner in corners) / 4
+        
+        # 找到包围框的右上角点
+        top_right = max(corners, key=lambda p: p[0] + p[1])
+        
+        # 在右上角附近放置文本
+        text_position = APoint(top_right[0] + 5, top_right[1] + 5, 0)
+        text_content = f"{width:.0f}*{height:.0f}"
+        text = model.AddText(text_content, text_position, 50)  # 文本高度设为5
+        text.Color = color_index
+        
+        # 将文字设置到"obb"图层
+        if obb_layer:
+            try:
+                text.Layer = "obb"
+            except Exception as e:
+                print(f"设置文字图层时出错: {e}")
+        
+        lines.append(text)
     
     return lines
 
@@ -337,12 +393,12 @@ def analyze_and_draw_bounding_boxes(acad, entities, draw_boxes=True):
     aabb = get_aabb_bounding_box(points)
     if aabb:
         print("\n轴对齐包围盒 (AABB):")
-        print(f"  尺寸: {aabb['width']:.3f} x {aabb['height']:.3f}")
+        print(f"  尺寸: {aabb['width']:.3f} * {aabb['height']:.3f}")
         print(f"  面积: {aabb['area']:.3f}")
         
         # 绘制AABB (红色)
         if draw_boxes:
-            draw_bounding_box(acad, aabb, 1)
+            draw_bounding_box_with_text(acad, aabb, 1)
             print("  已绘制AABB (红色)")
     
     # 计算OBB
@@ -355,7 +411,7 @@ def analyze_and_draw_bounding_boxes(acad, entities, draw_boxes=True):
         print(f"  中心点: ({obb['center'][0]:.3f}, {obb['center'][1]:.3f})")
         
         # 将OBB尺寸复制到剪贴板（去掉空格）
-        obb_dimensions = f"{obb['width']:.0f}x{obb['height']:.0f}"
+        obb_dimensions = f"{obb['width']:.0f}*{obb['height']:.0f}"
         pyperclip.copy(obb_dimensions)
         print(f"  OBB尺寸已复制到剪贴板: {obb_dimensions}")
         
@@ -363,10 +419,10 @@ def analyze_and_draw_bounding_boxes(acad, entities, draw_boxes=True):
             saving = (1 - obb['area'] / aabb['area']) * 100
             print(f"  相比AABB节省: {saving:.2f}%")
         
-        # 绘制OBB (绿色)
+        # 绘制OBB (绿色) 并添加文本标注
         if draw_boxes:
-            draw_bounding_box(acad, obb, 3)
-            print("  已绘制OBB (绿色)")
+            draw_bounding_box_with_text(acad, obb, 3, obb['width'], obb['height'])
+            print("  已绘制OBB (绿色) 和尺寸文本")
     
     return {
         'points': points,

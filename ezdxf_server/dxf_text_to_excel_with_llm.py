@@ -50,7 +50,7 @@ class DXFTextToExcelConverter:
         # 定义提取字段配置，通过修改这个列表可以同时改变提示语句和JSON示例
         self.extraction_fields = [
             {"key": "drawing_number", "label": "ABC123", "display_name": "图号"},
-            {"key": "specification", "label": "PL厚度*宽度*长度", "display_name": "规格"},
+            {"key": "specification", "label": "PL宽度*长度", "display_name": "规格"},
             
             {"key": "quantity", "label": "5", "display_name": "数量"},
             {"key": "material", "label": "不锈钢", "display_name": "材料"},
@@ -207,7 +207,7 @@ class DXFTextToExcelConverter:
         # 根据当前字段配置动态生成提示语句
         labels = [field["display_name"] for field in self.extraction_fields]
         labels_str = "、".join(labels)
-        instruction = f"请分析以下DXF文件中的文本信息，提取出{labels_str}等关键信息，并以JSON格式返回。"
+        instruction = f"请分析以下DXF文件中的文本信息，提取出{labels_str}等关键信息,不要统计，并以JSON格式返回。"
         
         # 动态构建JSON示例中的字段部分
         field_lines = []

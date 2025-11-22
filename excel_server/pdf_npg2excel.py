@@ -31,7 +31,7 @@ class UniversalFileToExcelConverter:
         # 定义提取字段配置，通过修改这个列表可以同时改变提示语句和JSON示例
         self.extraction_fields = [
             {"key": "drawing_number", "label": "P7764", "display_name": "图号"},
-            {"key": "specification", "label": "PL厚度*宽度*长度", "display_name": "规格"},
+            {"key": "specification", "label": "PL厚度*宽度*长度（类似PL8*504*1000）", "display_name": "规格"},
             
             {"key": "quantity", "label": "5", "display_name": "数量"},
             {"key": "material", "label": "不锈钢", "display_name": "材料"},
@@ -359,18 +359,20 @@ class UniversalFileToExcelConverter:
                         
                         json_fields_block = ",\n".join(field_lines)
                         
+                        # 修改：添加文件名信息到提示内容中
                         messages = [
                             {
                                 "role": "user",
-                                "content": f'''{instruction}，并以 JSON 格式返回。
-                    输出格式要求：
-                    {{
-                        "drawing_info": [
-                            {{
-                    {json_fields_block}
-                            }}
-                        ]
-                    }}'''
+                                "content": f'''文件名: {os.path.basename(file_path)}
+{instruction}，并以 JSON 格式返回。
+输出格式要求：
+{{
+    "drawing_info": [
+        {{
+{json_fields_block}
+        }}
+    ]
+}}'''
                             }
                         ]
                         
@@ -399,18 +401,20 @@ class UniversalFileToExcelConverter:
                 
                 json_fields_block = ",\n".join(field_lines)
                 
+                # 修改：添加文件名信息到提示内容中
                 messages = [
                     {
                         "role": "user",
-                        "content": f'''{instruction}，并以 JSON 格式返回。
-        输出格式要求：
+                        "content": f'''文件名: {os.path.basename(file_path)}
+{instruction}，并以 JSON 格式返回。
+输出格式要求：
+{{
+    "drawing_info": [
         {{
-            "drawing_info": [
-                {{
-        {json_fields_block}
-                }}
-            ]
-        }}'''
+{json_fields_block}
+        }}
+    ]
+}}'''
                     }
                 ]
                 

@@ -46,9 +46,9 @@ class LLMService:
         # 加载 .env 文件中的环境变量
         dotenv_path = r'E:\code\apikey\.env'
         load_dotenv(dotenv_path)
-        self.api_url = os.getenv('deepseek_OPENAI_API_URL')
-        self.model_name = os.getenv('deepseek_MODEL_NAME')
-        self.api_key = os.getenv('deepseek_OPENAI_API_KEY')
+        self.api_url = os.getenv('LLM_OPENAI_API_URL')
+        self.model_name = os.getenv('LLM_MODEL_NAME')
+        self.api_key = os.getenv('LLM_OPENAI_API_KEY')
             # 检查必需的环境变量是否存在
         if not self.api_url:
             raise ValueError("环境变量 'deepseek_OPENAI_API_URL' 未设置或为空")
