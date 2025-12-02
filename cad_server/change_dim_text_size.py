@@ -11,7 +11,8 @@ def format_decimal(value):
     if value == int(value):  
         return int(value)  
     else:  
-        return round(value, 1)  
+        return int(value) 
+        return round(value, 0)  
   
 def get_selected_dimensions(acad):    
     """    
