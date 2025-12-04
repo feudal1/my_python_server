@@ -58,13 +58,18 @@ class ArcCutCalculator:
         arc_difference = outer_arc_length - inner_arc_length
 
         # 弯角补偿(固定值)
-        bend_compensation = 10
+        bend_compensation = 20
+
+
 
         # 计算总长度
         total_length = arc_difference + bend_compensation
-
+ 
         # 口宽(固定值)
-        mouth_width = 20
+        mouth_width = 20.
+
+        # 直段避让(固定值)
+        straight_section_evasion = 20
 
         # 计算初始刀数
         initial_knife_count = total_length / mouth_width
@@ -79,7 +84,7 @@ class ArcCutCalculator:
         segment_count = final_knife_count - 1
 
         # 计算刀间距
-        knife_spacing = outer_arc_length / segment_count
+        knife_spacing = (outer_arc_length-straight_section_evasion) / segment_count
         
         # 返回所有计算结果
         return {

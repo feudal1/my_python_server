@@ -33,116 +33,51 @@ def get_selection_or_model_space(acad, doc):
         print(f"无法获取选择集: {e}")
         return None
 
-def get_points_from_entities(entities):
-    """从AutoCAD实体中提取线段的端点"""
-    points = []
+def get_lines_from_entities(entities):
+    """从AutoCAD实体中提取线段"""
+    lines = []
     
     for i, entity in enumerate(entities):
         try:
             if entity.ObjectName == "AcDbLine":
                 start = entity.StartPoint[:2]
                 end = entity.EndPoint[:2]
-                points.append(tuple(start))
-                points.append(tuple(end))
-                print(f"找到线段 {len(points)//2}: 起点({start[0]:.2f}, {start[1]:.2f}), 终点({end[0]:.2f}, {end[1]:.2f})")
-            elif entity.ObjectName == "AcDbPolyline":
-                # 处理多段线（包括带圆弧的多段线）
-                vertex_count = entity.Coordinates.count
-                coords = entity.Coordinates
-                
-                # 获取多段线的顶点
-                polyline_points = []
-                for j in range(0, vertex_count, 2):
-                    if j + 1 < vertex_count:
-                        x, y = coords[j], coords[j+1]
-                        polyline_points.append((x, y))
-                
-                # 如果是封闭多段线，移除重复点
-                if entity.Closed and len(polyline_points) > 1:
-                    polyline_points.pop()  # 移除最后一个与第一个重合的点
-                
-                points.extend(polyline_points)
-                print(f"找到多段线 {i+1}: 共{len(polyline_points)}个顶点")
-                
-                # 对于带圆弧的多段线，我们还可以采样圆弧部分以获得更精确的边界
-                for j in range(entity.Coordinates.count // 2 - 1):
-                    if hasattr(entity, 'GetBulge') and entity.GetBulge(j) != 0:
-                        # 如果存在凸度（bulge），表示这是一段圆弧
-                        bulge = entity.GetBulge(j)
-                        if j*2+3 < entity.Coordinates.count:
-                            start_point = (coords[j*2], coords[j*2+1])
-                            end_point = (coords[j*2+2], coords[j*2+3])
-                            
-            elif entity.ObjectName == "AcDbArc":
-                # 处理圆弧对象，将其拆分成20个点
-                center = entity.Center[:2]
-                radius = entity.Radius
-                start_angle = entity.StartAngle
-                end_angle = entity.EndAngle
-                
-                # 确保角度范围正确
-                if end_angle < start_angle:
-                    end_angle += 2 * math.pi
-                    
-                # 在圆弧上均匀采样20个点
-                for k in range(20):
-                    angle = start_angle + (end_angle - start_angle) * k / 19
-                    x = center[0] + radius * math.cos(angle)
-                    y = center[1] + radius * math.sin(angle)
-                    points.append((x, y))
-                    
-                print(f"找到圆弧 {i+1}: 采样20个点")
-                
-            elif entity.ObjectName == "AcDbCircle":
-                # 处理圆对象，将其拆分成40个点
-                center = entity.Center[:2]
-                radius = entity.Radius
-                
-                # 在圆上均匀采样40个点
-                for k in range(40):
-                    angle = 2 * math.pi * k / 40
-                    x = center[0] + radius * math.cos(angle)
-                    y = center[1] + radius * math.sin(angle)
-                    points.append((x, y))
-                    
-                print(f"找到圆 {i+1}: 采样40个点")
-                
-            else:
-                print(f"跳过非线段对象 {i+1}: {entity.ObjectName}")
+                lines.append((tuple(start), tuple(end)))
+                print(f"找到线段 {len(lines)}: 起点({start[0]:.2f}, {start[1]:.2f}), 终点({end[0]:.2f}, {end[1]:.2f})")
+            # 可以根据需要添加对其他实体类型的处理...
         except Exception as e:
             print(f"处理对象 {i+1} 时出错: {e}")
             continue
     
-    points = list(set(points))
-    print(f"共提取到 {len(points)} 个不重复的点")
-    return points
+    print(f"共提取到 {len(lines)} 条线段")
+    return lines
 
-class PointCluster:
-    def __init__(self, points=[], min_x=0, max_x=0, min_y=0, max_y=0):
-        self.points = points
+class LineCluster:
+    def __init__(self, lines=[], min_x=0, max_x=0, min_y=0, max_y=0):
+        self.lines = lines
         self.min_x = min_x
         self.max_x = max_x
         self.min_y = min_y
         self.max_y = max_y
 
-def cluster_points_by_proximity(points, distance_threshold=50.0):
-    """根据点之间的距离对点进行聚类，采用seg_part.py中的方法"""
-    if not points:
+def cluster_lines(lines, distance_threshold=50.0):
+    """对线段进行聚类，基于您之前成功的算法"""
+    if not lines:
         return []
     
     clusters = []
-    remaining_points = list(points)  # 创建副本用于处理
+    remaining_lines = list(lines)  # 创建副本用于处理
 
-    while remaining_points:
-        # 取出第一个点作为种子
-        seed = remaining_points.pop(0)
+    while remaining_lines:
+        # 取出第一条线段作为种子
+        seed = remaining_lines.pop(0)
         current_cluster = [seed]
         
         # 初始化聚落的边界
-        min_x = seed[0]
-        max_x = seed[0]
-        min_y = seed[1]
-        max_y = seed[1]
+        min_x = min(seed[0][0], seed[1][0])
+        max_x = max(seed[0][0], seed[1][0])
+        min_y = min(seed[0][1], seed[1][1])
+        max_y = max(seed[0][1], seed[1][1])
         
         while True:
             # 扩展边界
@@ -151,34 +86,43 @@ def cluster_points_by_proximity(points, distance_threshold=50.0):
             expanded_min_y = min_y - distance_threshold
             expanded_max_y = max_y + distance_threshold
             
-            # 寻找在扩展边界内的点
+            # 寻找在扩展边界内的线段
             to_add = []
-            for point in list(remaining_points):  # 遍历副本避免问题
-                # 检查点是否在扩展后的边界内
-                if (expanded_min_x <= point[0] <= expanded_max_x and
-                    expanded_min_y <= point[1] <= expanded_max_y):
-                    to_add.append(point)
+            for line in list(remaining_lines):  # 遍历副本避免问题
+                in_cluster = False
+                # 检查线段的两个端点是否在扩展后的边界内
+                for point in line:
+                    if (expanded_min_x <= point[0] <= expanded_max_x and
+                        expanded_min_y <= point[1] <= expanded_max_y):
+                        in_cluster = True
+                        break
+                if in_cluster:
+                    to_add.append(line)
             
             # 如果没有找到，结束循环
             if not to_add:
                 break
             
-            # 将找到的点加入当前聚落，并更新边界
-            for point in to_add:
-                current_cluster.append(point)
-                remaining_points.remove(point)
+            # 将找到的线段加入当前聚落，并更新边界
+            for line in to_add:
+                current_cluster.append(line)
+                remaining_lines.remove(line)
                 # 更新当前聚落的边界
-                min_x = min(min_x, point[0])
-                max_x = max(max_x, point[0])
-                min_y = min(min_y, point[1])
-                max_y = max(max_y, point[1])
+                line_min_x = min(p[0] for p in line)
+                line_max_x = max(p[0] for p in line)
+                line_min_y = min(p[1] for p in line)
+                line_max_y = max(p[1] for p in line)
+                min_x = min(min_x, line_min_x)
+                max_x = max(max_x, line_max_x)
+                min_y = min(min_y, line_min_y)
+                max_y = max(max_y, line_max_y)
         
         # 检查是否有其他聚落被当前聚落完全包含，如果有则合并
         clusters_to_remove = []
         for cluster in clusters:
             if (min_x <= cluster.min_x and min_y <= cluster.min_y and
                 max_x >= cluster.max_x and max_y >= cluster.max_y):
-                current_cluster.extend(cluster.points)
+                current_cluster.extend(cluster.lines)
                 clusters_to_remove.append(cluster)
         
         # 移除被包含的聚落
@@ -186,8 +130,8 @@ def cluster_points_by_proximity(points, distance_threshold=50.0):
             clusters.remove(cluster)
         
         # 将当前聚落加入结果列表
-        current_cluster_obj = PointCluster(
-            points=current_cluster,
+        current_cluster_obj = LineCluster(
+            lines=current_cluster,
             min_x=min_x,
             max_x=max_x,
             min_y=min_y,
@@ -196,6 +140,14 @@ def cluster_points_by_proximity(points, distance_threshold=50.0):
         clusters.append(current_cluster_obj)
 
     return clusters
+
+def get_points_from_cluster(cluster):
+    """从线段聚类中提取所有点"""
+    points = []
+    for line in cluster.lines:
+        points.append(line[0])  # 起点
+        points.append(line[1])  # 终点
+    return list(set(points))  # 去重
 
 def get_aabb_bounding_box(points):
     """获取轴对齐的最小包围矩形"""
@@ -506,8 +458,9 @@ def process_clusters(acad, clusters):
     colors = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     
     for i, cluster in enumerate(clusters):
-        points = cluster.points  # 注意这里改为 .points
-        print(f"\n聚类 {i} 包含 {len(points)} 个点")
+        # 从线段聚类中提取点
+        points = get_points_from_cluster(cluster)
+        print(f"\n聚类 {i} 包含 {len(cluster.lines)} 条线段 ({len(points)} 个点)")
         
         # 计算AABB
         aabb = get_aabb_bounding_box(points)
@@ -555,15 +508,15 @@ def main():
         
         print(f"处理 {len(entities)} 个对象")
         
-        # 提取点数据
-        points = get_points_from_entities(entities)
+        # 提取线段数据
+        lines = get_lines_from_entities(entities)
         
-        if len(points) < 1:
-            print("未找到有效点")
+        if len(lines) < 1:
+            print("未找到有效线段")
             return
         
-        # 对点进行聚类
-        clusters = cluster_points_by_proximity(points, distance_threshold=100.0)  # 增加阈值以适应您的数据
+        # 对线段进行聚类
+        clusters = cluster_lines(lines, distance_threshold=2000.0)  # 根据您的数据调整阈值
         print(f"\n总共识别到 {len(clusters)} 个聚类")
         
         # 处理每个聚类并绘制OBB框
