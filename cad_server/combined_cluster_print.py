@@ -54,6 +54,23 @@ def get_cluster_boundaries(cluster):
     
     return (min(x_coords), min(y_coords), max(x_coords), max(y_coords))
 
+def get_cluster_x_position(cluster):
+    """
+    获取聚类的X轴位置（最小X坐标）
+    
+    Args:
+        cluster: 聚类对象
+        
+    Returns:
+        float: 聚类的最小X坐标值
+    """
+    points = get_points_from_cluster(cluster)
+    if not points:
+        return 0
+    
+    x_coords = [p[0] for p in points]
+    return min(x_coords)
+
 def print_cluster_to_pdf(acad, doc, cluster_id, boundaries, output_dir):
     """
     将单个聚类区域打印到PDF
@@ -162,6 +179,10 @@ def main():
         if not clusters:
             print("未发现任何聚类，程序退出")
             return
+        
+        # 按照X轴坐标对聚类进行排序
+        clusters.sort(key=get_cluster_x_position)
+        print(f"\n已按X轴坐标对聚类进行排序")
         
         # 创建输出目录
         dxf_path = doc.FullName
