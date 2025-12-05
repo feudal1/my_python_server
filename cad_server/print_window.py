@@ -46,7 +46,8 @@ for i, media in enumerate(media_names, 1):
     print(f"  {i}. {media}")
     
 doc.ActiveLayout.CanonicalMediaName = "ISO_A3_(297.00_x_420.00_MM)"
-
+  # 禁用线宽打印
+doc.ActiveLayout.PlotWithLineweights = False
 # 自动识别横竖方向
 if width > height:
     # 横向打印
