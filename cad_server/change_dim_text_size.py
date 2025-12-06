@@ -15,14 +15,14 @@ def format_decimal(value):
         return round(value, 0)  
   
 def get_selected_dimensions(acad):    
-    """    
+    """     
     获取用户选择的标注对象    
     """    
     try:    
         # 使用 PyAutoCAD 的 get_selection 方法    
         selection = acad.get_selection("请选择标注对象")    
             
-        dimensions = []    
+        dimensions = []     
         for i in range(selection.Count):    
             try:    
                 obj = selection.Item(i)    
