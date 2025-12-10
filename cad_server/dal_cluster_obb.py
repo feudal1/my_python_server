@@ -52,8 +52,8 @@ def get_lines_from_entities(entities):
                 
                 # 在圆上均匀采样40个点并连接成线段
                 circle_points = []
-                for k in range(40):
-                    angle = 2 * math.pi * k / 40
+                for k in range(80):
+                    angle = 2 * math.pi * k / 80
                     x = center[0] + radius * math.cos(angle)
                     y = center[1] + radius * math.sin(angle)
                     circle_points.append((x, y))
@@ -78,8 +78,8 @@ def get_lines_from_entities(entities):
                     
                 # 在圆弧上均匀采样20个点并连接成线段
                 arc_points = []
-                for k in range(20):
-                    angle = start_angle + (end_angle - start_angle) * k / 19
+                for k in range(40):
+                    angle = start_angle + (end_angle - start_angle) * k / 39
                     x = center[0] + radius * math.cos(angle)
                     y = center[1] + radius * math.sin(angle)
                     arc_points.append((x, y))

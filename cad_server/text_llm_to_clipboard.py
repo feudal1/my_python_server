@@ -196,7 +196,7 @@ def get_text_insertion_point(text_obj):
         print(f"获取文本插入点时出错: {e}")
         return APoint(0, 0)
 
-def add_processed_mark(acad, doc, insertion_point):
+def add_processed_mark(acad,test, doc, insertion_point):
     """
     在指定位置添加"已处理"标记文本
     
@@ -207,7 +207,7 @@ def add_processed_mark(acad, doc, insertion_point):
     """
     try:
         # 使用AddText创建单行文本，这是最稳定的方式
-        text_entity = doc.ModelSpace.AddText("已处理", insertion_point, 200)
+        text_entity = doc.ModelSpace.AddText(test, insertion_point, 50)
         
         # 设置文本颜色为红色 (ACI颜色索引为1代表红色)
         text_entity.Color = 1
@@ -549,14 +549,14 @@ def main():
         print("-" * 40)
         print(formatted_result)
         print("-" * 40)
-        
+        cad_friendly_result = "\n".join([line.replace("\t", " ") for line in formatted_result.splitlines()])
         # 添加"已处理"标记文本
         # 获取第一个选中文本的插入点作为标记位置
         if selected_texts:
             insertion_point = get_text_insertion_point(selected_texts[0])
             # 偏移一点位置，避免完全重叠，增加偏移量使标记更可见
             mark_point = APoint(insertion_point.x, insertion_point.y + 300)
-            add_processed_mark(acad, doc, mark_point)
+            add_processed_mark(acad, cad_friendly_result,doc, mark_point)
         
     except Exception as e:
         print(f"处理过程中出错: {e}")

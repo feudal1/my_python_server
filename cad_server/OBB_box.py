@@ -86,8 +86,8 @@ def get_points_from_entities(entities):
                     end_angle += 2 * math.pi
                     
                 # 在圆弧上均匀采样20个点
-                for k in range(20):
-                    angle = start_angle + (end_angle - start_angle) * k / 19
+                for k in range(40):
+                    angle = start_angle + (end_angle - start_angle) * k / 39
                     x = center[0] + radius * math.cos(angle)
                     y = center[1] + radius * math.sin(angle)
                     points.append((x, y))
@@ -100,8 +100,8 @@ def get_points_from_entities(entities):
                 radius = entity.Radius
                 
                 # 在圆上均匀采样40个点
-                for k in range(40):
-                    angle = 2 * math.pi * k / 40
+                for k in range(80):
+                    angle = 2 * math.pi * k / 80
                     x = center[0] + radius * math.cos(angle)
                     y = center[1] + radius * math.sin(angle)
                     points.append((x, y))
@@ -362,7 +362,7 @@ def draw_bounding_box_with_text(acad, box, color_index, width=None, height=None)
         
         # 在右上角附近放置文本
         text_position = APoint(top_right[0] + 5, top_right[1] + 5, 0)
-        text_content = f"{width:.0f}*{height:.0f}"
+        text_content = f"长度{width:.0f}*宽度{height:.0f}"
         text = model.AddText(text_content, text_position, 50)  # 文本高度设为5
         text.Color = color_index
         
@@ -400,7 +400,7 @@ def analyze_and_draw_bounding_boxes(acad, entities, draw_boxes=True):
         
         # 绘制AABB (红色)
         if draw_boxes:
-            draw_bounding_box_with_text(acad, aabb, 1)
+           # draw_bounding_box_with_text(acad, aabb, 1)
             print("  已绘制AABB (红色)")
     
     # 计算OBB
