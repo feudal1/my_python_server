@@ -12,7 +12,7 @@ acad.app.Visible = True
 doc = acad.doc
 
 # 获取DXF文件所在目录作为默认PDF保存路径
-dxf_path = doc.FullName
+dxf_path = doc.FullName 
 default_pdf_path = os.path.dirname(dxf_path)
 
 # 提示用户选择第一个点
