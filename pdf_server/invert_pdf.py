@@ -2,7 +2,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog
 import fitz  # PyMuPDF
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 import io
 
 def invert_pdf_colors(input_pdf_path):
@@ -23,9 +23,14 @@ def invert_pdf_colors(input_pdf_path):
         img_data = pix.tobytes("ppm")
         pil_img = Image.open(io.BytesIO(img_data))
 
-        # 转灰度并反色
+        # 转灰度并增强对比度
         gray_img = pil_img.convert("L")
-        inverted = ImageOps.invert(gray_img)
+        # 增强对比度（1.5倍），可以根据需要调整这个值
+        enhancer = ImageEnhance.Contrast(gray_img)
+        contrast_enhanced = enhancer.enhance(20)
+        
+        # 反色处理
+        inverted = ImageOps.invert(contrast_enhanced)
         inverted_images.append(inverted)
 
     # 保存为新的 PDF
