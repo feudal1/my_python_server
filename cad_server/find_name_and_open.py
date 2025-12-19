@@ -33,7 +33,7 @@ if cad_files:
           
         # 等待文档完全加载  
         import time  
-        time.sleep(1)  
+        time.sleep(0.1)  
           
         # 使用 acad.doc 而不是返回的文档对象  
         doc = acad.doc  
