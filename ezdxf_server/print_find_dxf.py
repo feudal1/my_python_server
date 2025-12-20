@@ -13,42 +13,42 @@ import time
 # 添加常量  
 SHOW_TIMING = False  
   
-def dxf_to_pdf(dxf_path, pdf_path):  
-    """将DXF文件转换为PDF，并将所有字体替换为gbcbig.shx"""  
-    # 读取 DXF 文件  
-    doc = ezdxf.readfile(dxf_path)  
+def dxf_to_pdf(dxf_path, pdf_path):
+    """将DXF文件转换为PDF，并将所有字体替换为gbcbig.shx"""
+    # 读取 DXF 文件
+    doc = ezdxf.readfile(dxf_path)
       
-    # 替换所有文本样式中的字体为 gbcbig.shx  
-    for style in doc.styles:  
-        style.dxf.font = 'gbcbig.shx'  
+    # 替换所有文本样式中的字体为 gbcbig.shx
+    for style in doc.styles:
+        style.dxf.font = 'gbcbig.shx'
       
-    # 创建渲染配置 - 完整的线宽控制  
-    config = Configuration(  
-        lineweight_scaling=0.05,  # 缩放因子，值越小线条越细  
-        min_lineweight=0.05,      # 最小线宽（单位：1/300英寸）  
-        lineweight_policy=LineweightPolicy.ABSOLUTE  # 使用绝对线宽策略  
-    )  
+    # 创建渲染配置 - 完整的线宽控制
+    config = Configuration(
+        lineweight_scaling=0.05,  # 缩放因子，值越小线条越细
+        min_lineweight=0.05,      # 最小线宽（单位：1/300英寸）
+        lineweight_policy=LineweightPolicy.ABSOLUTE  # 使用绝对线宽策略
+    )
       
-    # 创建渲染环境 - 设置固定DPI确保一致性  
-    fig = plt.figure(dpi=300)  
-    ax = fig.add_axes([0, 0, 1, 1])  
+    # 创建渲染环境 - 设置固定DPI确保一致性
+    fig = plt.figure(dpi=300)
+    ax = fig.add_axes([0, 0, 1, 1])
       
-    # 创建后端渲染器  
-    backend = MatplotlibBackend(ax)  
-    backend.configure(config)  # 显式配置后端  
+    # 创建后端渲染器
+    backend = MatplotlibBackend(ax)
+    backend.configure(config)  # 显式配置后端
       
-    context = RenderContext(doc)  
+    context = RenderContext(doc)
       
-    # 传入配置到前端  
-    frontend = Frontend(context, backend, config=config)  
+    # 传入配置到前端
+    frontend = Frontend(context, backend, config=config)
       
-    # 渲染图形  
-    frontend.draw_layout(doc.modelspace())  
-    backend.finalize()  
+    # 渲染图形
+    frontend.draw_layout(doc.modelspace())
+    backend.finalize()
       
-    # 保存为 PDF - 使用相同DPI  
-    fig.savefig(pdf_path, format='pdf', bbox_inches='tight', dpi=300)  
-    plt.close(fig)  
+    # 保存为 PDF - 使用相同DPI 并去除边框
+    fig.savefig(pdf_path, format='pdf', bbox_inches='tight', dpi=300, pad_inches=0)
+    plt.close(fig)
   
 def open_file(filepath):  
     """跨平台打开文件"""  
