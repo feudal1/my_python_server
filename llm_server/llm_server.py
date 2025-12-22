@@ -44,7 +44,7 @@ class LLMService:
     def __init__(self):
         # 从环境变量中获取 DeepSeek 参数
         # 加载 .env 文件中的环境变量
-        dotenv_path = r'E:\code\apikey\.env'
+        dotenv_path = r'G:\apikey\.env'
         load_dotenv(dotenv_path)
         self.api_url = os.getenv('LLM_OPENAI_API_URL')
         self.model_name = os.getenv('LLM_MODEL_NAME')
