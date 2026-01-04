@@ -12,50 +12,26 @@ import base64
 
 from dotenv import load_dotenv
 
-def get_exe_dir():
-    """获取exe文件所在目录（兼容开发环境和打包环境）"""
-    if getattr(sys, 'frozen', False):
-        # 在exe环境中，返回exe所在目录
-        return Path(sys.executable).parent
-    else:
-        # 在开发环境中，返回脚本所在目录
-        return Path(__file__).parent
+# 定义全局变量
+CURRENT_DIR = Path(__file__).parent
+dotenv_path = r'my_python_server_private\.env'
+load_dotenv(dotenv_path)
+workenv=os.getenv('workenv')
 
-def update_global_paths():
-    """更新全局路径为exe目录下的路径"""
-    global CONFIG_PATH, KNOWLEDGE_FILE_PATH, WORKFLOW_PATH, dotenv_path
-    exe_dir = get_exe_dir()
-    
-    # 从exe目录加载环境变量
-    dotenv_path = exe_dir /"my_python_server_private "/".env"
-    load_dotenv(dotenv_path)
-    
-    workenv = os.getenv('workenv')
-    CONFIG_PATH = exe_dir / "config" / (workenv + "_tools_config.json")
-    KNOWLEDGE_FILE_PATH = exe_dir / "config" / (workenv + "_knowledge.txt")
-    WORKFLOW_PATH = exe_dir / "config" / (workenv + "_workflow.txt")
+CONFIG_PATH = CURRENT_DIR / "config" / (workenv + "_tools_config.json")
+KNOWLEDGE_FILE_PATH = CURRENT_DIR / "config" / (workenv + "_knowledge.txt")
 
-# 初始化全局路径
-update_global_paths()
-workenv = os.getenv('workenv')
-print(workenv)
-
+WORKFLOW_PATH = CURRENT_DIR / "config" / (workenv + "_workflow.txt")  # 新增：工作流程文件路径
 def execute_python_script(script_path, *args):
     """
-    执行指定路径的Python脚本 - 兼容exe环境
+    执行指定路径的Python脚本
     """
-    # 判断是否在exe环境中运行
-    if getattr(sys, 'frozen', False):
-        # 在exe环境中，脚本应该在exe同级目录或子目录
-        exe_dir = Path(sys.executable).parent
-        script_full_path = exe_dir / script_path
-    else:
-        # 在开发环境中，按原有逻辑处理
-        current_dir = Path(__file__).parent.parent  # 回到项目根目录
-        script_full_path = current_dir / script_path
+    # 获取项目根目录（从当前脚本位置向上一级）
+    current_dir = Path(__file__).parent.parent  # 回到项目根目录
+    script_full_path = current_dir / script_path
     
     if not script_full_path.exists():
-        return f"错误: 脚本 '{script_path}' 不存在，当前路径: {Path.cwd()}, 查找路径: {script_full_path}"
+        return f"错误: 脚本 '{script_path}' 不存在"
     
     if script_full_path.suffix != '.py':
         return f"错误: 文件必须是Python脚本 (.py文件)"
@@ -70,7 +46,7 @@ def execute_python_script(script_path, *args):
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=str(Path.cwd()),  # 使用当前工作目录
+            cwd=str(current_dir),
             encoding='utf-8',      # 明确指定UTF-8编码
             errors='replace'       # 遇到编码错误时替换字符
         )
@@ -84,6 +60,7 @@ def execute_python_script(script_path, *args):
         return f"脚本执行超时: {script_path}"
     except Exception as e:
         return f"执行脚本时出错: {str(e)}"
+
 
 def list_available_tools():
     """
@@ -99,6 +76,7 @@ def list_available_tools():
     except Exception as e:
         return []
 
+
 def get_tool_by_name(tool_name):
     """
     根据工具名称获取工具信息
@@ -110,6 +88,7 @@ def get_tool_by_name(tool_name):
         if isinstance(tool, dict) and tool.get('name') == tool_name:  # 确保 tool 是字典
             return tool
     return None
+
 
 def execute_tool(tool_name, *args):
     """
@@ -123,6 +102,7 @@ def execute_tool(tool_name, *args):
     result = execute_python_script(script_path, tool_name, *args)
    
     return result
+
 
 def get_available_tools_info():
     """
@@ -140,6 +120,7 @@ def get_available_tools_info():
     except Exception as e:
         print(f"加载工具配置失败: {e}")
         return []
+
 
 def get_tools_description():
     """获取工具描述，用于提供给VLM"""
@@ -192,6 +173,7 @@ def image_to_base64(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
+
 def is_task_completed(ai_response, should_check=True):
     """判断任务是否完成 - 使用特定结束标记，但可以控制是否检查"""
     if not should_check or not ai_response:
@@ -214,12 +196,11 @@ def send_task_confirmation_to_ai(vlm_service, task_description, system_prompt, m
     """
     向AI发送任务完成确认消息
     """
-    # 使用exe目录
-    exe_dir = get_exe_dir()
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     
     # 截取当前屏幕
     screenshot = pyautogui.screenshot()
-    screenshot_path = exe_dir / "current_screen.png"
+    screenshot_path = os.path.join(current_dir, "current_screen.png")
     screenshot.save(screenshot_path)
     
     # 准备消息列表
@@ -258,7 +239,7 @@ def send_task_confirmation_to_ai(vlm_service, task_description, system_prompt, m
     image_content = {
         "type": "image_url",
         "image_url": {
-            "url": f"data:image/jpeg;base64,{image_to_base64(str(screenshot_path))}"
+            "url": f"data:image/jpeg;base64,{image_to_base64(screenshot_path)}"
         }
     }
     
@@ -294,12 +275,11 @@ def vision_task_loop(task_description, knowledge_file=None, memory_file=None, wo
     """
     基于视觉的循环任务执行器 - 支持多截图上下文
     """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     if knowledge_file is None:
         knowledge_file = KNOWLEDGE_FILE_PATH
     if memory_file is None:
-        # 使用exe目录作为memory文件路径
-        exe_dir = get_exe_dir()
-        memory_file = exe_dir / "memory.txt"
+        memory_file = os.path.join(current_dir, "memory.txt")
 
     # 创建LLM服务实例（模拟VLM）
     vlm_service = VLMService()
@@ -324,13 +304,11 @@ def vision_task_loop(task_description, knowledge_file=None, memory_file=None, wo
         
         # 截取当前屏幕
         screenshot = pyautogui.screenshot()
-        # 使用exe目录保存截图
-        exe_dir = get_exe_dir()
-        screenshot_path = exe_dir / f"screenshot_{iteration_count}.png"
+        screenshot_path = os.path.join(current_dir, f"screenshot_{iteration_count}.png")
         screenshot.save(screenshot_path)
         
         # 添加到截图历史
-        screenshot_history.append(str(screenshot_path))
+        screenshot_history.append(screenshot_path)
         
         system_prompt = "\n".join(system_prompt_parts)
         
@@ -450,7 +428,6 @@ def vision_task_loop(task_description, knowledge_file=None, memory_file=None, wo
     
     if iteration_count >= max_iterations:
         yield "达到最大迭代次数，停止任务执行"
-
 def has_tool_calls(response_text):
     """检查响应中是否包含工具调用"""
     tool_pattern = r'\[TOOL:([^\],\]]+)(?:,([^\]]*))?\]'
@@ -510,7 +487,6 @@ def get_workflow_state_from_memory_in_app(memory_file_path):
             print(f"从记忆文件读取工作流程状态失败: {str(e)}")
     
     return saved_state
-
 def parse_named_arguments(params_str):
     """
     解析命名参数格式如 "param1=value1,param2=value2" 或 "url='example.com'"
@@ -558,7 +534,6 @@ def parse_named_arguments(params_str):
             values_only.append(arg.strip())
     
     return values_only
-
 def process_tool_calls(response_text, memory_file_path=None, workflow_state_ref=None, is_inquiry_phase=False):
     """
     解析AI响应中的工具调用指令
@@ -660,7 +635,6 @@ def parse_tool_call(full_match):
         tool_name = full_match.strip()
         tool_args = []
         return tool_name, tool_args
-
 def parse_history_content(content):
     """
     解析历史对话内容，转换为messages格式
@@ -710,6 +684,8 @@ def parse_history_content(content):
     
     return messages
 
+
+
 import tkinter as tk
 from tkinter import messagebox, ttk
 import threading
@@ -719,13 +695,14 @@ from llm_class import VLMService
 import pyautogui
 import base64
 
+
 class VLMTaskApp:
     def __init__(self, root):
         self.root = root
         self.root.title("VLM牛马")
         self.root.geometry("400x350")
         self.root.resizable(False, False)
-        
+        self.root.attributes('-toolwindow', True)
         # 简化颜色主题 - 使用统一的蓝色系
         self.colors = {
             'primary': '#1E88E5',        # 主蓝色
@@ -754,11 +731,11 @@ class VLMTaskApp:
         # 创建界面
         self.setup_modern_ui()
         
-        # 文件路径 - 使用exe目录
-        exe_dir = get_exe_dir()
-        self.knowledge_file = exe_dir / "config" / (workenv + "_knowledge.txt")
-        self.workflow_path = exe_dir / "config" / (workenv + "_workflow.txt")
-        self.memory_file = exe_dir / "memory.txt"
+        # 文件路径 - 使用全局参数
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.knowledge_file = KNOWLEDGE_FILE_PATH  # 使用全局变量
+        self.workflow_path = WORKFLOW_PATH  # 使用全局变量
+        self.memory_file = os.path.join(current_dir, "memory.txt")
         
         # 加载工作流程
         self.load_workflow_content()
@@ -766,7 +743,7 @@ class VLMTaskApp:
     
     def ensure_memory_file_exists(self):
         """确保memory文件存在"""
-        if not self.memory_file.exists():
+        if not os.path.exists(self.memory_file):
             try:
                 # 创建空的memory文件
                 with open(self.memory_file, 'w', encoding='utf-8') as f:
@@ -962,7 +939,7 @@ class VLMTaskApp:
             anchor=tk.W
         )
         self.status_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=3)
-    
+
     def open_page_selection_dialog(self):
         """打开页面选择弹窗"""
         if not self.workflow_state:
@@ -976,7 +953,7 @@ class VLMTaskApp:
         dialog.configure(bg=self.colors['gray'])
         dialog.transient(self.root)
         dialog.grab_set()
-
+        
         # 标题
         title_label = tk.Label(
             dialog,
@@ -1116,7 +1093,6 @@ class VLMTaskApp:
                 print(f"加载工作流程失败: {str(e)}")
         else:
             print(f"工作流程文件不存在: {workflow_path}")
-    
     def update_task_display(self):
         """更新当前任务显示"""
         if not self.workflow_state or self.current_page_index >= len(self.workflow_state):
@@ -1517,7 +1493,6 @@ class VLMTaskApp:
         else:
             print("短期记忆文件不存在")
             self.update_status("状态: 短期记忆文件不存在")
-    
     def save_workflow_state(self):
         """保存工作流程状态到记忆文件"""
         try:
@@ -1575,10 +1550,12 @@ def main():
     except:
         pass
     
+    
     root.attributes('-topmost', True)
     
     app = VLMTaskApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
