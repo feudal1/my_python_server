@@ -192,19 +192,36 @@ import bpy
 # 获取场景中所有名称包含指定模式的物体
 objects_to_delete = []
 for obj in bpy.context.scene.objects:
-    if "{name_pattern}" in obj.name:
+    if "{name_pattern}" in obj.name and obj.type == 'MESH':
         objects_to_delete.append(obj)
 
-# 删除找到的物体
+# 删除找到的物体并打印详细信息
 deleted_count = 0
 for obj in objects_to_delete:
+    print("删除物体: 名称=" + obj.name + ", 类型=" + obj.type)
+    
     bpy.data.objects.remove(obj, do_unlink=True)
     deleted_count += 1
 
-print(f"已删除 {{deleted_count}} 个包含 '{name_pattern}' 的物体")
+print("已删除 "+str(deleted_count)+f"个包含 '{name_pattern}' 的物体")
 '''
     return call_blender_api('/api/exec', code)
+def clear_parent_keep_transform():
+    """
+    清除选中对象的父级关系，但保持变换（位置、旋转、缩放）
+    """
+    code = '''
+import bpy
 
+# 确保至少有一个对象被选中
+if bpy.context.selected_objects:
+    # 清除父级关系但保持变换
+    bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+    print("已清除选中对象的父级关系（保持变换）")
+else:
+    print("错误: 请先选择要清除父级的对象")
+'''
+    return call_blender_api('/api/exec', code)
 def apply_armature_pose():
     """
     切换到姿态模式并应用选中的骨架
@@ -393,7 +410,22 @@ result = import_psk(psk, bpy.context, options)
     else:
         print("未选择有效的PSK文件")
         return {"status": "error", "message": "未选择有效的PSK文件"}
+def parent_object_to_bone():
+    """
+    将选中的对象设置为骨骼父级
+    """
+    code = '''
+import bpy
 
+# 确保至少有一个对象被选中，并且存在活动对象
+if bpy.context.selected_objects and bpy.context.active_object:
+    # 执行骨骼父级操作
+    bpy.ops.object.parent_set(type='BONE')
+    print("对象已设置为骨骼父级")
+else:
+    print("错误: 请先选择要绑定的对象并确保有一个活动对象")
+'''
+    return call_blender_api('/api/exec', code)
 def add_data_transfer_modifier():
     """
     添加数据传输修改器并配置顶点组权重传输
@@ -441,8 +473,11 @@ def execute_tool(tool_name, *args):
         "delete_objects_by_name": delete_objects_by_name,
         "fix_model": fix_model,
         "parent_object_to_armature": parent_object_to_armature,
-        "apply_armature_pose": apply_armature_pose,  # 新增这一行
+        "apply_armature_pose": apply_armature_pose,
+        "clear_parent_keep_transform": clear_parent_keep_transform,
+        "parent_object_to_bone": parent_object_to_bone,  # 新增这一行
     }
+    
     
     if tool_name in tool_functions:
         if tool_name == "activate_blender":
@@ -482,8 +517,11 @@ def main():
     # return 
     tool_name = sys.argv[1]  
     
+    # 检查是否有额外参数传递给工具
+    args = sys.argv[2:]  # 获取工具名称之后的所有参数
+    
     # 执行对应的工具
-    response = execute_tool(tool_name)
+    response = execute_tool(tool_name, *args)
     
     # 如果不是激活窗口操作，则打印响应结果
     if tool_name != "activate_blender":

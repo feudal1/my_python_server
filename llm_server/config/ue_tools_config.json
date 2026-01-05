@@ -1,0 +1,13 @@
+{
+  "tools": [
+    {
+      "name": "activate_ue",
+      "path": "ue_cline/ue_api_tool.py",
+      "description": "激活ue窗口，将ue应用带到前台",
+      "parameters": {},
+      "examples": [
+        "[TOOL:activate_ue]"
+      ]
+    }
+  ]
+}

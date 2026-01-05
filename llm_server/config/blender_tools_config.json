@@ -46,6 +46,24 @@
       ]
     },
     {
+  "name": "clear_parent_keep_transform",
+  "path": "blender_cline/blender_api_tool.py",
+  "description": "清除选中对象的父级关系，但保持变换（位置、旋转、缩放）",
+  "parameters": {},
+  "examples": [
+    "[TOOL:clear_parent_keep_transform]"
+  ]
+},
+{
+  "name": "parent_object_to_bone",
+  "path": "blender_cline/blender_api_tool.py",
+  "description": "将选中的对象设置为骨骼父级",
+  "parameters": {},
+  "examples": [
+    "[TOOL:parent_object_to_bone]"
+  ]
+},
+    {
       "name": "delete_objects_by_name",
       "path": "blender_cline/blender_api_tool.py",
       "description": "删除Blender场景中名称包含指定模式的物体",

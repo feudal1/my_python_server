@@ -27,9 +27,14 @@ def switch_environment(new_env):
         
         # 保存当前环境到配置文件
         save_current_environment(new_env)
+        
+        # 重启程序以应用新环境
+        print("正在重启以应用新环境...")
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+        
         return True
     return False
-
 
 def save_current_environment(env):
     """保存当前环境到配置文件"""
@@ -78,6 +83,7 @@ def execute_python_script(script_path, *args):
     current_dir = Path(__file__).parent.parent  # 回到项目根目录
     script_full_path = current_dir / script_path
     
+    print ("脚本路径:",script_full_path)
     if not script_full_path.exists():
         return f"错误: 脚本 '{script_path}' 不存在"
     
@@ -438,9 +444,9 @@ def parse_tool_call(full_match):
     """
     智能解析工具调用字符串
     """
+    # 检查是否为命名参数格式: tool_name(param1=value1,param2=value2)
     if '(' in full_match and full_match.count('(') == full_match.count(')'):
-        # 命名参数格式: tool_name(param=value)
-        paren_start = full_match.rfind('(')  # 使用rfind找到最后一个左括号
+        paren_start = full_match.rfind('(')
         if paren_start != -1:
             tool_name = full_match[:paren_start].strip()
             params_str = full_match[paren_start+1:-1]  # 去掉最外层括号
@@ -448,6 +454,56 @@ def parse_tool_call(full_match):
             # 解析命名参数
             tool_args = parse_named_arguments(params_str)
             return tool_name, tool_args
+    
+    # 检查是否为带等号的参数格式: tool_name,param1=value1,param2=value2
+    elif '=' in full_match and ',' in full_match:
+        # 分割工具名和参数
+        parts = full_match.split(',', 1)
+        tool_name = parts[0].strip()
+        
+        # 解析参数部分，可能有多个参数，如: param1=value1,param2=value2
+        params_part = parts[1]
+        param_list = []
+        
+        # 处理可能包含引号的参数值
+        current_param = ""
+        inside_quotes = False
+        quote_char = None
+        
+        i = 0
+        while i < len(params_part):
+            char = params_part[i]
+            
+            if char in ['"', "'"] and not inside_quotes:
+                inside_quotes = True
+                quote_char = char
+            elif char == quote_char and inside_quotes:
+                inside_quotes = False
+                quote_char = None
+            elif char == ',' and not inside_quotes:
+                param_list.append(current_param.strip())
+                current_param = ""
+            else:
+                current_param += char
+            i += 1
+        
+        # 添加最后一个参数
+        if current_param:
+            param_list.append(current_param.strip())
+        
+        # 提取参数值（跳过参数名）
+        tool_args = []
+        for param in param_list:
+            if '=' in param:
+                # 分离参数名和值
+                _, value = param.split('=', 1)
+                # 移除可能的引号
+                value = value.strip().strip('"\'')
+                tool_args.append(value)
+            else:
+                tool_args.append(param.strip())
+        
+        return tool_name, tool_args
     
     elif ',' in full_match:
         # 位置参数格式: tool_name,arg1,arg2
@@ -463,7 +519,6 @@ def parse_tool_call(full_match):
         tool_name = full_match.strip()
         tool_args = []
         return tool_name, tool_args
-
 
 def process_tool_calls(response_text, memory_file_path=None, workflow_state_ref=None, is_inquiry_phase=False):
     """
@@ -588,6 +643,7 @@ def parse_history_content(content):
     return messages
 
 
+# 在 vision_task_loop 函数中，修改返回的LLM响应格式
 def vision_task_loop(task_description, knowledge_file=None, memory_file=None, workflow_state=None, reset_first_iteration=True):
     """
     基于视觉的循环任务执行器 - 支持多截图上下文
@@ -705,7 +761,9 @@ def vision_task_loop(task_description, knowledge_file=None, memory_file=None, wo
             
             print(f"LLM服务返回: 【{ai_response}】")
             
-            yield f" {ai_response}"
+            # 优化输出格式，提供更清晰的状态信息
+            response_preview = ai_response[:60] + "..." if len(ai_response) > 60 else ai_response
+            yield f"LLM响应: {response_preview}"
             
             # 处理工具调用
             tool_execution_result = process_tool_calls(ai_response, memory_file, workflow_state, is_inquiry_phase=False)
@@ -746,11 +804,11 @@ def vision_task_loop(task_description, knowledge_file=None, memory_file=None, wo
     if iteration_count >= max_iterations:
         yield "达到最大迭代次数，停止任务执行"
 
-
 # 定义全局变量
 CURRENT_DIR = Path(__file__).parent
-workenvs = ["web", "blender"]
+workenvs = ["web", "blender","ue"]
 workenv = load_default_environment()  # 从配置文件加载默认环境
 
 # 初始化路径
 update_paths()
+

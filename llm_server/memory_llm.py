@@ -667,7 +667,30 @@ class VLMTaskApp:
         task_thread.start()
 
     def execute_all_tasks(self):
-        """执行所有任务，按顺序自动执行"""
+        """执行所有任务"""
+        if self.is_executing:
+            messagebox.showwarning("警告", "任务正在执行中，请等待完成")
+            return
+        
+        if not self.workflow_state:
+            messagebox.showwarning("警告", "没有可执行的任务")
+            return
+        
+        self.is_executing = True
+        self.run_current_button.config(state=tk.DISABLED)
+        self.run_all_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.update_status("状态: 正在执行所有任务...")
+        
+        # 在新线程中执行所有任务以避免界面冻结
+        task_thread = threading.Thread(
+            target=self.execute_all_tasks_internal
+        )
+        task_thread.daemon = True
+        task_thread.start()
+
+    def execute_all_tasks_internal(self):
+        """执行所有任务的内部实现"""
         try:
             for task_index in range(len(self.workflow_state)):
                 # 检查是否停止了执行
@@ -704,6 +727,9 @@ class VLMTaskApp:
                         print("系统: 任务已手动停止")
                         return
                     
+                    # 更新状态栏显示LLM响应
+                    self.root.after(0, lambda out=output: self.update_status(f"状态: {out}"))
+                    
                     if "[TASK_COMPLETED]" in output and "[TOOL:" not in output:  # 确保不是工具执行结果中的标记
                         # 如果是子任务完成标记，直接标记为已完成
                         self.root.after(0, lambda idx=task_index: self.mark_step_as_completed(idx))
@@ -736,7 +762,6 @@ class VLMTaskApp:
             self.root.after(0, lambda: self.run_all_button.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
             self.root.after(0, lambda: self.update_status("状态: 所有任务执行完成"))
-
     def execute_single_task(self, task_index):
         """执行单个任务"""
         try:
@@ -761,6 +786,9 @@ class VLMTaskApp:
                 if not self.is_executing:
                     print("系统: 任务已手动停止")
                     return
+                
+                # 更新状态栏显示LLM响应
+                self.root.after(0, lambda out=output: self.update_status(f"状态: {out}"))
                 
                 if "[TASK_COMPLETED]" in output and "[TOOL:" not in output:  # 确保不是工具执行结果中的标记
                     print(f"任务{task_index + 1}执行结果: {output}")
@@ -790,8 +818,7 @@ class VLMTaskApp:
             self.is_executing = False
             self.root.after(0, lambda: self.run_current_button.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.run_all_button.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
-            
+            self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))           
     def mark_step_as_completed(self, index):
         """标记步骤为已完成"""
         if 0 <= index < len(self.workflow_state):
