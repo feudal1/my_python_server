@@ -2,18 +2,14 @@ import tkinter as tk
 from tkinter import messagebox
 import threading
 import os
-from pathlib import Path
 
 # 从utils导入所需的功能
 from utils import (
-    switch_environment, load_default_environment, 
+    switch_environment, 
     get_workflow_state_from_memory_in_app, vision_task_loop, 
-    process_tool_calls, has_tool_calls, is_task_completed,
-    send_task_confirmation_to_ai, get_tools_description,
-    get_available_tools_info
+ 
 )
-from llm_class import VLMService
-import pyautogui
+
 
 
 class VLMTaskApp:

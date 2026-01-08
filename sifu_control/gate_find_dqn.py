@@ -1,8 +1,3 @@
-"""
-目标搜索强化学习AI - 门搜索专用版
-使用Grounding DINO进行目标检测，结合移动控制器进行强化学习训练
-适配VLMWindow格式
-"""
 import os
 import sys
 import time
@@ -15,6 +10,7 @@ import cv2
 from PIL import Image
 import base64
 from collections import deque
+import logging
 
 # 添加当前目录到Python路径，确保能正确导入同目录下的模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -28,6 +24,28 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # 导入现有的目标检测功能
 from grounding_dino.dino import detect_objects_with_text_transformers
 
+
+# 配置日志
+def setup_logging():
+    """设置日志配置"""
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    log_filename = os.path.join(log_dir, f"gate_find_dqn_{time.strftime('%Y%m%d_%H%M%S')}.log")
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_filename, encoding='utf-8'),
+            logging.StreamHandler()  # 同时输出到控制台
+        ]
+    )
+    
+    return logging.getLogger(__name__)
+
+
 class TargetSearchEnvironment:
     """
     目标搜索环境
@@ -39,6 +57,7 @@ class TargetSearchEnvironment:
         self.max_steps = 50
         self.last_detection_result = None
         self.last_center_distance = float('inf')
+        self.logger = logging.getLogger(__name__)
         
     def capture_screen(self):
         """
@@ -51,7 +70,7 @@ class TargetSearchEnvironment:
             return screenshot
         except ImportError:
             # 如果没有截图功能，模拟返回一张图片
-            print("截图功能不可用，使用模拟图片")
+            self.logger.warning("截图功能不可用，使用模拟图片")
             return np.zeros((480, 640, 3), dtype=np.uint8)
     
     def detect_target(self, image):
@@ -65,9 +84,10 @@ class TargetSearchEnvironment:
         # 调用现有的检测函数
         try:
             detection_results = detect_objects_with_text_transformers(base64_image, self.target_description)
+            self.logger.debug(f"检测到 {len(detection_results)} 个目标")
             return detection_results
         except Exception as e:
-            print(f"检测过程中出错: {e}")
+            self.logger.error(f"检测过程中出错: {e}")
             return []
     
     def calculate_reward(self, detection_results, prev_distance):
@@ -76,6 +96,7 @@ class TargetSearchEnvironment:
         """
         if not detection_results:
             # 没有检测到目标，给予小的负奖励
+            self.logger.debug("未检测到目标，给予-1.0奖励")
             return -1.0
         
         # 找到最近的检测框
@@ -95,12 +116,15 @@ class TargetSearchEnvironment:
         # 如果距离比之前更近，给予正奖励
         if min_distance < prev_distance:
             reward = 10.0 * (prev_distance - min_distance) / max(prev_distance, 1)
+            self.logger.debug(f"距离变近，奖励: {reward:.2f}")
         else:
             reward = -5.0  # 距离变远，给予负奖励
+            self.logger.debug(f"距离变远，奖励: {reward:.2f}")
         
         # 如果目标在中心附近，给予额外奖励
         if min_distance < 50:
             reward += 20.0  # 找到目标，给予大奖励
+            self.logger.info(f"目标接近中心，额外奖励，总奖励: {reward:.2f}")
         
         return reward
     
@@ -109,6 +133,9 @@ class TargetSearchEnvironment:
         执行动作并返回新的状态、奖励和是否结束
         动作空间: 0-forward, 1-backward, 2-turn_left, 3-turn_right, 4-strafe_left, 5-strafe_right
         """
+        action_names = ["forward", "backward", "turn_left", "turn_right", "strafe_left", "strafe_right"]
+        self.logger.debug(f"执行动作: {action_names[action]}")
+        
         # 执行动作
         if action == 0:  # forward
             self.controller.move_forward(1)
@@ -158,12 +185,19 @@ class TargetSearchEnvironment:
         # 检查是否结束
         done = self.step_count >= self.max_steps or (detection_results and current_distance < 50)
         
+        if done:
+            if detection_results and current_distance < 50:
+                self.logger.info(f"在第 {self.step_count} 步找到目标")
+            else:
+                self.logger.info(f"达到最大步数 {self.max_steps}")
+        
         return new_state, reward, done, detection_results
     
     def reset(self):
         """
         重置环境
         """
+        self.logger.debug("重置环境")
         self.step_count = 0
         self.last_center_distance = float('inf')
         self.last_detection_result = None
@@ -232,32 +266,41 @@ class TargetSearchDQNAgent:
         
         # 更新目标网络
         self.update_target_network()
+        
+        self.logger = logging.getLogger(__name__)
     
     def update_target_network(self):
         """
         更新目标网络权重
         """
         self.target_network.load_state_dict(self.q_network.state_dict())
+        self.logger.debug("目标网络已更新")
     
     def remember(self, state, action, reward, next_state, done):
         """
         存储经验
         """
         self.memory.append((state, action, reward, next_state, done))
+        if len(self.memory) % 1000 == 0:
+            self.logger.debug(f"经验回放池大小: {len(self.memory)}")
     
     def act(self, state):
         """
         根据当前策略选择动作
         """
         if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_space)
+            action = random.randrange(self.action_space)
+            self.logger.debug(f"随机选择动作: {action}")
+            return action
         
         # 预处理状态
         state_tensor = self._preprocess_state(state)
         state_tensor = state_tensor.unsqueeze(0).to(self.device)  # 添加批次维度
         
         q_values = self.q_network(state_tensor)
-        return np.argmax(q_values.cpu().data.numpy())
+        action = np.argmax(q_values.cpu().data.numpy())
+        self.logger.debug(f"选择动作: {action}")
+        return action
     
     def _preprocess_state(self, state):
         """
@@ -282,10 +325,10 @@ class TargetSearchDQNAgent:
         
         batch = random.sample(self.memory, batch_size)
         states = torch.stack([self._preprocess_state(e[0]) for e in batch]).to(self.device)
-        actions = torch.LongTensor([e[1]] for e in batch).to(self.device)
-        rewards = torch.FloatTensor([e[2]] for e in batch).to(self.device)
+        actions = torch.LongTensor([e[1] for e in batch]).to(self.device)
+        rewards = torch.FloatTensor([e[2] for e in batch]).to(self.device)
         next_states = torch.stack([self._preprocess_state(e[3]) for e in batch]).to(self.device)
-        dones = torch.BoolTensor([e[4]] for e in batch).to(self.device)
+        dones = torch.BoolTensor([e[4] for e in batch]).to(self.device)
         
         current_q_values = self.q_network(states).gather(1, actions)
         next_q_values = self.target_network(next_states).max(1)[0].detach()
@@ -299,12 +342,15 @@ class TargetSearchDQNAgent:
         
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+        
+        self.logger.debug(f"经验回放训练完成，损失: {loss.item():.4f}")
 
 def train_gate_search_agent():
     """
     训练门搜索智能体
     """
-    print("开始训练门搜索智能体...")
+    logger = logging.getLogger(__name__)
+    logger.info("开始训练门搜索智能体...")
     
     env = TargetSearchEnvironment("gate")
     agent = TargetSearchDQNAgent()
@@ -327,7 +373,7 @@ def train_gate_search_agent():
             step_count += 1
             
             if done:
-                print(f"Episode: {episode}, Score: {step_count}, Total Reward: {total_reward}, Epsilon: {agent.epsilon:.2f}")
+                logger.info(f"Episode: {episode}, Score: {step_count}, Total Reward: {total_reward:.2f}, Epsilon: {agent.epsilon:.2f}")
                 scores.append(step_count)
                 break
         
@@ -341,14 +387,14 @@ def train_gate_search_agent():
         # 每50轮打印一次平均分数
         if episode % 50 == 0 and episode > 0:
             avg_score = np.mean(scores)
-            print(f"Episode {episode}, Average Score: {avg_score:.2f}")
+            logger.info(f"Episode {episode}, Average Score: {avg_score:.2f}")
     
-    print("训练完成！")
+    logger.info("训练完成！")
     
     # 保存模型
     model_path = "gate_search_dqn_model.pth"
     torch.save(agent.q_network.state_dict(), model_path)
-    print(f"模型已保存为 {model_path}")
+    logger.info(f"模型已保存为 {model_path}")
     
     return agent
 
@@ -356,7 +402,8 @@ def find_gate_with_dqn():
     """
     使用DQN算法寻找门
     """
-    print("开始训练并寻找门...")
+    logger = logging.getLogger(__name__)
+    logger.info("开始训练并寻找门...")
     
     # 训练智能体
     trained_agent = train_gate_search_agent()
@@ -369,32 +416,32 @@ def find_gate_with_dqn():
     step_count = 0
     done = False
     
-    print("开始测试智能体...")
+    logger.info("开始测试智能体...")
     
     while not done and step_count < 50:
         action = trained_agent.act(state)
         
         # 打印动作
         action_names = ["forward", "backward", "turn_left", "turn_right", "strafe_left", "strafe_right"]
-        print(f"Step {step_count}: Taking action - {action_names[action]}")
+        logger.info(f"Step {step_count}: Taking action - {action_names[action]}")
         
         state, reward, done, detection_results = env.step(action)
         total_reward += reward
         step_count += 1
         
         if detection_results:
-            print(f"Detected {len(detection_results)} gates")
+            logger.info(f"Detected {len(detection_results)} gates")
         
         if done:
             if detection_results:
-                print("成功找到门！")
+                logger.info("成功找到门！")
                 return "成功找到门！"
             else:
-                print("未能找到门")
+                logger.info("未能找到门")
                 return "未能找到门"
     
     result = f"测试完成 - Steps: {step_count}, Total Reward: {total_reward}"
-    print(result)
+    logger.info(result)
     return result
 
 def execute_tool(tool_name, *args):
@@ -408,6 +455,8 @@ def execute_tool(tool_name, *args):
     Returns:
         dict: API响应结果
     """
+    logger = logging.getLogger(__name__)
+    
     tool_functions = {
         "find_gate_with_dqn": find_gate_with_dqn,
         "train_gate_search_agent": train_gate_search_agent
@@ -416,10 +465,13 @@ def execute_tool(tool_name, *args):
     if tool_name in tool_functions:
         try:
             result = tool_functions[tool_name]()
+            logger.info(f"工具执行成功: {tool_name}")
             return {"status": "success", "result": str(result)}
         except Exception as e:
+            logger.error(f"执行工具时出错: {str(e)}")
             return {"status": "error", "message": f"执行工具时出错: {str(e)}"}
     else:
+        logger.error(f"错误: 未知的DQN工具 '{tool_name}'")
         print(f"错误: 未知的DQN工具 '{tool_name}'")
         return {"status": "error", "message": f"未知的DQN工具 '{tool_name}'"}
 
@@ -427,9 +479,14 @@ def main():
     """
     主函数，用于直接运行此脚本
     """
+    # 设置日志
+    logger = setup_logging()
+    
     if len(sys.argv) < 2:
+        logger.info("用法: python gate_find_dqn.py <tool_name>")
+        logger.info("可用工具: find_gate_with_dqn, train_gate_search_agent")
         print("用法: python gate_find_dqn.py <tool_name>")
-        print("可用工具: find_gate_with_dqn, train_gate_search_agent")
+        print("可用工具: find_gate_search_agent, find_gate_with_dqn")
         return
 
     tool_name = sys.argv[1]

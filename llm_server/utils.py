@@ -119,7 +119,7 @@ def execute_python_script(script_path, *args):
             cmd,
             capture_output=True,
             text=True,
-            timeout=30,
+        
             cwd=str(current_dir),
             encoding='utf-8',      # 明确指定UTF-8编码
             errors='replace'       # 遇到编码错误时替换字符
