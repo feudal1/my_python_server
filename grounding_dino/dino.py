@@ -79,7 +79,72 @@ def select_image_and_classes():
     text = " ".join(class_list)
     
     return image_path, text
+def detect_objects_with_text_transformers(base64_image, text_description):
+    """
+    使用Grounding DINO检测图像中的目标对象
+    :param base64_image: base64编码的图像字符串
+    :param text_description: 文本描述，用于检测的类别
+    :return: 检测结果列表，包含边界框、标签和置信度
+    """
+    import base64
+    from io import BytesIO
+    
+    # 将base64图像转换为PIL图像
+    image_bytes = base64.b64decode(base64_image)
+    image_buffer = BytesIO(image_bytes)
+    image = Image.open(image_buffer)
+    
+    # 确保图像是RGB格式
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    # 设置模型和设备
+    model_id = "IDEA-Research/grounding-dino-tiny"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    processor = AutoProcessor.from_pretrained(model_id)
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+    
+    # 处理文本描述格式
+    text = text_description.strip().lower() + "."
+    
+    # 处理输入
+    inputs = processor(images=image, text=text, return_tensors="pt").to(device)
+    
+    # 模型推理
+    with torch.no_grad():
+        outputs = model(**inputs)
+    
+    # 后处理
+    results = processor.post_process_grounded_object_detection(
+        outputs,
+        input_ids=inputs.input_ids,
+        threshold=0.1,
+        text_threshold=0.3,
+        target_sizes=[image.size[::-1]]
+    )
+    
+    # 格式化结果
+    detection_results = []
+    if len(results) > 0:
+        boxes = results[0]['boxes']
+        labels = results[0]['text_labels'] if 'text_labels' in results[0] else results[0]['labels']
+        scores = results[0]['scores']
+        
+        for i in range(len(boxes)):
+            box = boxes[i].cpu().numpy()
+            score = scores[i].item()
+            label = labels[i]
+            
+            # 只包含置信度高的检测结果
+            if score > 0.4:
+                detection_results.append({
+                    'bbox': box.tolist(),  # 转换为列表格式
+                    'label': label,
+                    'score': score
+                })
+    
+    return detection_results
 def main():
     # 加载模型
     model_id = "IDEA-Research/grounding-dino-tiny"
