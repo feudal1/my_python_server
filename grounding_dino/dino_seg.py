@@ -169,13 +169,14 @@ def visualize_segmentation_results(image, results, masks, text_labels):
     
     ax.axis('off')
     
-    # 将matplotlib图形转换为PIL图像
-    canvas = FigureCanvasAgg(fig)
-    canvas.draw()
-    buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
-    ncols, nrows = canvas.get_width_height()
-    pil_image = Image.frombytes("RGB", (ncols, nrows), buf.tobytes())
+    # 将matplotlib图形转换为PIL图像 - 修复兼容性问题
+    import io
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight', dpi=100, pad_inches=0)
+    buf.seek(0)
+    pil_image = Image.open(buf)
     
+    # 不要在这里关闭buf，让PIL图像自己管理
     plt.close(fig)
     return pil_image
 
@@ -216,49 +217,7 @@ def select_image_and_classes():
     
     return image_path, text
 
-def main():
-    # 选择图片和类名
-    image_path, text = select_image_and_classes()
-    
-    if image_path is None or text is None:
-        return
 
-    # 加载图片并转换为RGB格式
-    image = Image.open(image_path)
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
-
-    print(f"选择的图片: {image_path}")
-    print(f"要识别的类: {text}")
-
-    # 使用Grounding DINO检测对象
-    print("正在使用Grounding DINO检测对象...")
-    detection_results = detect_objects_with_grounding_dino(image, text)
-    
-    # 提取边界框
-    boxes = detection_results['boxes'].cpu().numpy()
-    
-    print(f"检测到 {len(boxes)} 个对象")
-    
-    if len(boxes) == 0:
-        print("没有检测到任何对象")
-        return
-
-    # 使用SAM对检测到的对象进行分割
-    print("正在使用SAM进行分割...")
-    masks = segment_with_sam(image, boxes)
-    
-    # 可视化结果
-    print("正在生成可视化结果...")
-    result_image = visualize_segmentation_results(image, detection_results, masks, text)
-
-    # 保存结果
-    output_path = "dino_seg_result.jpg"
-    result_image.save(output_path)
-    print(f"\n结果已保存到 {output_path}")
-
-    # 显示图片（可选）
-    result_image.show()
 
 def detect_objects_with_dino_seg(base64_image, text_description):
     """
@@ -312,6 +271,56 @@ def detect_objects_with_dino_seg(base64_image, text_description):
             })
     
     return segmentation_results
+def main():
+    # 选择图片和类名
+    image_path, text = select_image_and_classes()
+    
+    if image_path is None or text is None:
+        return
 
+    # 加载图片并转换为RGB格式
+    image = Image.open(image_path)
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    print(f"选择的图片: {image_path}")
+    print(f"要识别的类: {text}")
+
+    # 使用Grounding DINO检测对象
+    print("正在使用Grounding DINO检测对象...")
+    detection_results = detect_objects_with_grounding_dino(image, text)
+    
+    # 提取边界框
+    boxes = detection_results['boxes'].cpu().numpy()
+    
+    print(f"检测到 {len(boxes)} 个对象")
+    
+    if len(boxes) == 0:
+        print("没有检测到任何对象")
+        return
+
+    # 使用SAM对检测到的对象进行分割
+    print("正在使用SAM进行分割...")
+    masks = segment_with_sam(image, boxes)
+    
+    # 可视化结果
+    print("正在生成可视化结果...")
+    result_image = visualize_segmentation_results(image, detection_results, masks, text)
+
+    # 如果图像是RGBA模式，转换为RGB模式以支持JPEG保存
+    if result_image.mode == 'RGBA':
+        # 创建白色背景
+        background = Image.new('RGB', result_image.size, (255, 255, 255))
+        # 将RGBA图像粘贴到白色背景上
+        background.paste(result_image, mask=result_image.split()[-1])  # 使用alpha通道作为蒙版
+        result_image = background
+
+    # 保存结果
+    output_path = "dino_seg_result.jpg"
+    result_image.save(output_path)
+    print(f"\n结果已保存到 {output_path}")
+
+    # 显示图片（可选）
+    result_image.show()
 if __name__ == "__main__":
     main()
