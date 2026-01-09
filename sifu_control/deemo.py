@@ -17,7 +17,7 @@ def main():
     
     try:
         # 导入现有的功能
-        from sifu_control.gate_find_dqn import execute_tool
+        from sifu_control.gate_find_ppo import execute_tool
         
         print("导入成功！")
         print("\n可用的功能:")
