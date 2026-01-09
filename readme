@@ -19,4 +19,4 @@ git rm -r --cached logs/
 
 https://gitee.com/feudal_1/my_python_serve r
 
-pyinstaller --onefile start.py --icon=favicon.ico  --clean --noconfirm --windowed
+pyinstaller --onefile keyboard_server\ipadplay_xz.py --icon=favicon.ico  --clean --noconfirm --windowed

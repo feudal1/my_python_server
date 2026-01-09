@@ -24,5 +24,6 @@ exe_output/*
 *screenshot*png
 
 *.spec
-
+*build*
+*dist*
 my_python_server_private*

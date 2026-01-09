@@ -1,14 +1,21 @@
 import sys
 import os
+import time
+from datetime import datetime
+import ctypes
+from ctypes import wintypes
+import threading
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string
+from flask_socketio import SocketIO, emit
 from flask_cors import CORS
-import subprocess
-import time
 
 app = Flask(__name__)
-CORS(app)  # 允许跨域请求，方便前端访问
+CORS(app)
+app.config['SECRET_KEY'] = 'your-secret-key-for-socketio'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # 用于跟踪按键状态
 key_states = {
@@ -16,17 +23,96 @@ key_states = {
     'z': False
 }
 
-def call_mousecontrol_function(function_name, *args):
-    """调用mousecontrol.py中的函数"""
+# Windows API 键盘事件常量
+INPUT_KEYBOARD = 1
+KEYEVENTF_SCANCODE = 0x0008
+KEYEVENTF_KEYUP = 0x0002
+
+# 虚拟键码和扫描码映射
+KEY_CODES = {
+    'x': {'vk': 0x58, 'scan': 0x2D},  # X键的虚拟键码和扫描码
+    'z': {'vk': 0x5A, 'scan': 0x2C}   # Z键的虚拟键码和扫描码
+}
+
+def send_win_key_event(key, is_keyup=False):
+    """使用Windows API发送按键事件，兼容游戏"""
     try:
-        cmd = ["python", os.path.join(os.path.dirname(__file__), "mousecontrol.py"), function_name] + list(args)
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
-        if result.returncode == 0:
-            return {"status": "success", "message": result.stdout.strip()}
-        else:
-            return {"status": "error", "message": result.stderr.strip()}
+        # 加载user32.dll
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        
+        # 定义INPUT结构
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = (("wVk", wintypes.WORD),
+                        ("wScan", wintypes.WORD),
+                        ("dwFlags", wintypes.DWORD),
+                        ("time", wintypes.DWORD),
+                        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)))
+        
+        class HARDWAREINPUT(ctypes.Structure):
+            _fields_ = (("uMsg", wintypes.DWORD),
+                        ("wParamL", wintypes.WORD),
+                        ("wParamH", wintypes.WORD))
+        
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = (("dx", wintypes.LONG),
+                        ("dy", wintypes.LONG),
+                        ("mouseData", wintypes.DWORD),
+                        ("dwFlags", wintypes.DWORD),
+                        ("time", wintypes.DWORD),
+                        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)))
+        
+        class INPUT_union(ctypes.Union):
+            _fields_ = (("ki", KEYBDINPUT),
+                        ("mi", MOUSEINPUT),
+                        ("hi", HARDWAREINPUT))
+        
+        class INPUT(ctypes.Structure):
+            _fields_ = (("type", wintypes.DWORD),
+                        ("union", INPUT_union))
+        
+        # 获取键码信息
+        key_info = KEY_CODES.get(key.lower())
+        if not key_info:
+            return {"status": "error", "message": f"不支持的键: {key}"}
+        
+        # 设置标志
+        flags = KEYEVENTF_KEYUP
+        if not is_keyup:
+            flags = 0  # 按下键时不设置KEYEVENTF_KEYUP标志
+        
+        # 添加扫描码标志
+        flags |= KEYEVENTF_SCANCODE
+        
+        # 创建输入事件
+        inputs = INPUT(
+            type=INPUT_KEYBOARD,
+            union=INPUT_union(
+                ki=KEYBDINPUT(
+                    wVk=key_info['vk'],
+                    wScan=key_info['scan'],
+                    dwFlags=flags,
+                    time=0,
+                    dwExtraInfo=None
+                )
+            )
+        )
+        
+        # 发送输入事件
+        result = user32.SendInput(1, ctypes.byref(inputs), ctypes.sizeof(INPUT))
+        
+        action = "释放" if is_keyup else "按下"
+        return {"status": "success", "message": f"成功{action}{key.upper()}键 (使用扫描码)"}
+        
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+def fast_key_down(key):
+    """快速按下键"""
+    return send_win_key_event(key, is_keyup=False)
+
+def fast_key_up(key):
+    """快速释放键"""
+    return send_win_key_event(key, is_keyup=True)
 
 # HTML模板
 HTML_TEMPLATE = '''
@@ -92,6 +178,13 @@ HTML_TEMPLATE = '''
             text-align: center;
         }
         
+        .response-time {
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #888;
+            text-align: center;
+        }
+        
         .pressed {
             background-color: #ff9999 !important;
         }
@@ -106,14 +199,17 @@ HTML_TEMPLATE = '''
         <div class="key-label">X</div>
         <div class="instructions">点击按住或松开X键</div>
         <div class="status" id="xStatus">状态: 未按下</div>
+        <div class="response-time" id="xResponseTime">响应时间: -- ms</div>
     </div>
     
     <div class="half z-half" id="zHalf">
         <div class="key-label">Z</div>
         <div class="instructions">点击按住或松开Z键</div>
         <div class="status" id="zStatus">状态: 未按下</div>
+        <div class="response-time" id="zResponseTime">响应时间: -- ms</div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
         // 按键状态
         let keyStates = {
@@ -121,49 +217,36 @@ HTML_TEMPLATE = '''
             z: false
         };
         
+        // 记录请求时间的对象
+        let requestTimes = {};
+        
         // 获取DOM元素
         const xHalf = document.getElementById('xHalf');
         const zHalf = document.getElementById('zHalf');
         const xStatus = document.getElementById('xStatus');
         const zStatus = document.getElementById('zStatus');
+        const xResponseTime = document.getElementById('xResponseTime');
+        const zResponseTime = document.getElementById('zResponseTime');
         
-        // 发送按键状态到服务器
-        async function sendKeyAction(action, key) {
-            try {
-                let endpoint;
-                if (action === 'press_key') {
-                    endpoint = '/press_key';
-                } else {
-                    endpoint = '/key_' + action;
-                }
-                
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({key: key})
-                });
-                const result = await response.json();
-                console.log(`Key ${key} ${action}:`, result);
-                return result;
-            } catch (error) {
-                console.error(`Error sending ${action} for key ${key}:`, error);
-            }
-        }
+        // 连接到Socket.IO服务器
+        const socket = io();
         
-        // 更新按键状态显示
+        // 更新按键状态显示（仅本地UI更新，立即响应）
         function updateStatus() {
             xStatus.textContent = `状态: ${keyStates.x ? '按下' : '未按下'}`;
-            zStatus.textContent = `状态: ${keyStates.z ? '按下' : '未按下'}`;
             
-            // 更新视觉效果
+            // 立即更新视觉效果，无需等待服务器响应
             if (keyStates.x) {
                 xHalf.classList.add('pressed');
             } else {
                 xHalf.classList.remove('pressed');
             }
+        }
+        
+        function updateZStatus() {
+            zStatus.textContent = `状态: ${keyStates.z ? '按下' : '未按下'}`;
             
+            // 立即更新视觉效果，无需等待服务器响应
             if (keyStates.z) {
                 zHalf.classList.add('z-pressed');
             } else {
@@ -171,110 +254,201 @@ HTML_TEMPLATE = '''
             }
         }
         
+        // Socket.IO事件监听器
+        socket.on('connect', function() {
+            console.log('已连接到服务器');
+        });
+        
+        socket.on('key_state_update', function(states) {
+            console.log('收到按键状态更新:', states);
+            // 从服务器同步状态（主要用于保持一致性）
+            keyStates.x = states.x;
+            keyStates.z = states.z;
+            updateStatus();
+            updateZStatus();
+        });
+        
+        // 记录请求时间并发送按键操作到服务器
+        function sendKeyAction(action, key) {
+            const requestId = Date.now() + '_' + Math.random();
+            requestTimes[requestId] = Date.now();
+            
+            // 发送数据到服务器，包含请求ID
+            socket.emit('key_control', {
+                action: action,
+                key: key,
+                requestId: requestId
+            });
+        }
+        
+        // 接收服务器响应并计算响应时间
+        socket.on('key_response', function(data) {
+            if (data.requestId && requestTimes[data.requestId]) {
+                const responseTime = Date.now() - requestTimes[data.requestId];
+                
+                // 更新对应的响应时间显示
+                if (data.key === 'x') {
+                    xResponseTime.textContent = `响应时间: ${responseTime} ms`;
+                } else if (data.key === 'z') {
+                    zResponseTime.textContent = `响应时间: ${responseTime} ms`;
+                }
+                
+                // 清理请求时间记录
+                delete requestTimes[data.requestId];
+                
+                console.log(`${data.key.toUpperCase()}键操作响应时间: ${responseTime}ms`);
+            }
+        });
+        
         // 为X区域添加事件监听器
         xHalf.addEventListener('mousedown', function(e) {
             e.preventDefault();
-            // 按下X键（长按）
-            sendKeyAction('down', 'x');
-            keyStates.x = true;
-            updateStatus();
+            if (!keyStates.x) {
+                // 立即更新UI状态
+                keyStates.x = true;
+                updateStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('down', 'x');
+            }
         });
         
         xHalf.addEventListener('mouseup', function() {
-            // 释放X键
-            sendKeyAction('up', 'x');
-            keyStates.x = false;
-            updateStatus();
+            if (keyStates.x) {
+                // 立即更新UI状态
+                keyStates.x = false;
+                updateStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'x');
+            }
         });
         
         xHalf.addEventListener('mouseleave', function() {
             // 鼠标离开区域，也应释放按键
             if (keyStates.x) {
-                sendKeyAction('up', 'x');
+                // 立即更新UI状态
                 keyStates.x = false;
                 updateStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'x');
             }
         });
         
         // 为Z区域添加事件监听器
         zHalf.addEventListener('mousedown', function(e) {
             e.preventDefault();
-            // 按下Z键（长按）
-            sendKeyAction('down', 'z');
-            keyStates.z = true;
-            updateStatus();
+            if (!keyStates.z) {
+                // 立即更新UI状态
+                keyStates.z = true;
+                updateZStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('down', 'z');
+            }
         });
         
         zHalf.addEventListener('mouseup', function() {
-            // 释放Z键
-            sendKeyAction('up', 'z');
-            keyStates.z = false;
-            updateStatus();
+            if (keyStates.z) {
+                // 立即更新UI状态
+                keyStates.z = false;
+                updateZStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'z');
+            }
         });
         
         zHalf.addEventListener('mouseleave', function() {
             // 鼠标离开区域，也应释放按键
             if (keyStates.z) {
-                sendKeyAction('up', 'z');
+                // 立即更新UI状态
                 keyStates.z = false;
-                updateStatus();
+                updateZStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'z');
             }
         });
         
         // 触摸设备支持
         xHalf.addEventListener('touchstart', function(e) {
             e.preventDefault();
-            // 按下X键（长按）
-            sendKeyAction('down', 'x');
-            keyStates.x = true;
-            updateStatus();
+            if (!keyStates.x) {
+                // 立即更新UI状态
+                keyStates.x = true;
+                updateStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('down', 'x');
+            }
         });
         
         xHalf.addEventListener('touchend', function(e) {
             e.preventDefault();
-            // 释放X键
-            sendKeyAction('up', 'x');
-            keyStates.x = false;
-            updateStatus();
+            if (keyStates.x) {
+                // 立即更新UI状态
+                keyStates.x = false;
+                updateStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'x');
+            }
         });
         
         xHalf.addEventListener('touchcancel', function() {
             // 触摸取消，释放按键
             if (keyStates.x) {
-                sendKeyAction('up', 'x');
+                // 立即更新UI状态
                 keyStates.x = false;
                 updateStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'x');
             }
         });
         
         zHalf.addEventListener('touchstart', function(e) {
             e.preventDefault();
-            // 按下Z键（长按）
-            sendKeyAction('down', 'z');
-            keyStates.z = true;
-            updateStatus();
+            if (!keyStates.z) {
+                // 立即更新UI状态
+                keyStates.z = true;
+                updateZStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('down', 'z');
+            }
         });
         
         zHalf.addEventListener('touchend', function(e) {
             e.preventDefault();
-            // 释放Z键
-            sendKeyAction('up', 'z');
-            keyStates.z = false;
-            updateStatus();
+            if (keyStates.z) {
+                // 立即更新UI状态
+                keyStates.z = false;
+                updateZStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'z');
+            }
         });
         
         zHalf.addEventListener('touchcancel', function() {
             // 触摸取消，释放按键
             if (keyStates.z) {
-                sendKeyAction('up', 'z');
+                // 立即更新UI状态
                 keyStates.z = false;
-                updateStatus();
+                updateZStatus();
+                
+                // 然后发送请求到服务器
+                sendKeyAction('up', 'z');
             }
         });
         
         // 页面加载时获取初始状态
         window.onload = function() {
             updateStatus();
+            updateZStatus();
         };
     </script>
 </body>
@@ -286,48 +460,43 @@ def index():
     """主页，提供HTML界面"""
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/press_key', methods=['POST'])
-def press_key():
-    """按下按键（短按）"""
-    data = request.json
+@socketio.on('key_control')
+def handle_key_control(data):
+    """处理按键控制请求"""
+    action = data.get('action')
     key = data.get('key', '').lower()
+    request_id = data.get('requestId')
     
     if key in ['x', 'z']:
-        result = call_mousecontrol_function('press_key', key)
-        return jsonify(result)
-    else:
-        return jsonify({"status": "error", "message": "只支持X和Z键"})
+        start_time = time.time()
+        
+        if action == 'down':
+            result = fast_key_down(key)
+            key_states[key] = True
+        elif action == 'up':
+            result = fast_key_up(key)
+            key_states[key] = False
+        else:
+            result = {"status": "error", "message": "不支持的操作"}
+        
+        # 记录处理时间
+        processing_time = (time.time() - start_time) * 1000  # 转换为毫秒
+        print(f"{key.upper()}键 {action} 操作处理时间: {processing_time:.2f}ms")
+        
+        # 包含请求ID和按键信息的响应
+        result['requestId'] = request_id
+        result['key'] = key
+        
+        # 广播更新后的状态给所有连接的客户端
+        socketio.emit('key_state_update', key_states)
+        
+        # 发送操作结果给发送者
+        emit('key_response', result)
 
-@app.route('/key_down', methods=['POST'])
-def key_down():
-    """按下并持续按住按键"""
-    data = request.json
-    key = data.get('key', '').lower()
-    
-    if key in ['x', 'z']:
-        result = call_mousecontrol_function('key_down', key)
-        key_states[key] = True
-        return jsonify(result)
-    else:
-        return jsonify({"status": "error", "message": "只支持X和Z键"})
-
-@app.route('/key_up', methods=['POST'])
-def key_up():
-    """释放按键"""
-    data = request.json
-    key = data.get('key', '').lower()
-    
-    if key in ['x', 'z']:
-        result = call_mousecontrol_function('key_up', key)
-        key_states[key] = False
-        return jsonify(result)
-    else:
-        return jsonify({"status": "error", "message": "只支持X和Z键"})
-
-@app.route('/key_state', methods=['GET'])
-def get_key_state():
+@socketio.on('get_key_state')
+def handle_get_key_state():
     """获取当前按键状态"""
-    return jsonify(key_states)
+    emit('key_state_update', key_states)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
