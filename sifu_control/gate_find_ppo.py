@@ -159,7 +159,7 @@ class TargetSearchEnvironment:
         
         return exploration_bonus
     
-    def calculate_reward(self, detection_results, prev_distance, action_taken=None):
+    def calculate_reward(self, detection_results, prev_distance, action_taken=None, image_shape=None):
         """
         计算奖励值
         """
@@ -172,6 +172,16 @@ class TargetSearchEnvironment:
             self.logger.debug(f"未检测到目标，探索奖励: {reward:.2f}")
             return reward
         
+        # 获取图像中心点，如果未提供image_shape，则使用默认值
+        if image_shape is not None:
+            img_height, img_width = image_shape[0], image_shape[1]
+            img_center_x = img_width / 2
+            img_center_y = img_height / 2
+        else:
+            # 默认值，仅用于向后兼容
+            img_center_x = 320  # 假设图像宽度为640
+            img_center_y = 240  # 假设图像高度为480
+        
         # 找到最近的检测框
         min_distance = float('inf')
         for detection in detection_results:
@@ -179,34 +189,41 @@ class TargetSearchEnvironment:
             center_x = (bbox[0] + bbox[2]) / 2
             center_y = (bbox[1] + bbox[3]) / 2
             # 计算到图像中心的距离
-            img_center_x = 320  # 假设图像宽度为640
-            img_center_y = 240  # 假设图像高度为480
             distance = np.sqrt((center_x - img_center_x)**2 + (center_y - img_center_y)**2)
             
             if distance < min_distance:
                 min_distance = distance
         
-        # 如果距离比之前更近，给予正奖励
+        # 基于目标中心与图像中心的距离给予奖励，距离越近奖励越高
+        # 最大奖励在中心位置，最小奖励在边缘
+        max_distance = np.sqrt((img_center_x)**2 + (img_center_y)**2)  # 图像对角线长度，即最大可能距离
+        centering_reward = 5.0 * (1 - min_distance / max_distance)  # 距离中心越近，奖励越高
+        
+        # 如果距离比之前更近，给予额外的正奖励
         if prev_distance != float('inf'):  # 只有在之前有有效距离的情况下才比较
             if min_distance < prev_distance:
                 # 避免除零错误，当prev_distance接近0时给予固定奖励
-                if prev_distance > 0:
-                    reward = 5.0 * (prev_distance - min_distance) / max(prev_distance, 1)
-                else:
-                    reward = 5.0  # 当前一次距离为0时的奖励
-                self.logger.debug(f"距离变近，奖励: {reward:.2f}")
+                improvement_factor = (prev_distance - min_distance) / max(prev_distance, 1)
+                movement_reward = 3.0 * improvement_factor
+                self.logger.debug(f"距离变近，移动奖励: {movement_reward:.2f}")
             else:
-                reward = -2.0  # 距离变远，给予负奖励，但比原来小
-                self.logger.debug(f"距离变远，奖励: {reward:.2f}")
+                movement_reward = -1.0  # 距离变远，给予负奖励
+                self.logger.debug(f"距离变远，移动奖励: {movement_reward:.2f}")
         else:
             # 第一次检测到目标时的奖励
-            reward = 3.0 - (min_distance / 200.0)  # 距离越近奖励越高，但系数调整
-            self.logger.debug(f"首次检测到目标，奖励: {reward:.2f}")
+            movement_reward = 1.0
+            self.logger.debug(f"首次检测到目标，奖励: {movement_reward:.2f}")
         
-        # 如果目标在中心附近，给予额外奖励
-        if min_distance < 50:
-            reward += 10.0  # 找到目标，给予大奖励
-            self.logger.info(f"目标接近中心，额外奖励，总奖励: {reward:.2f}")
+        # 组合奖励
+        reward = centering_reward + movement_reward
+        
+        # 如果目标非常接近中心，给予额外的大奖励
+        if min_distance < 30:  # 调整阈值以更精确地奖励居中
+            reward += 15.0  # 接近中心的大奖励
+            self.logger.info(f"目标非常接近中心，额外奖励，总奖励: {reward:.2f}")
+        elif min_distance < 60:  # 中等距离中心也给予奖励
+            reward += 8.0
+            self.logger.debug(f"目标接近中心，额外奖励，总奖励: {reward:.2f}")
         
         return reward
     
@@ -248,7 +265,7 @@ class TargetSearchEnvironment:
             for detection in detection_results:
                 bbox = detection['bbox']
                 center_x = (bbox[0] + bbox[2]) / 2
-                center_y = (bbox[1] + bbox[2]) / 2
+                center_y = (bbox[1] + bbox[3]) / 2
                 img_center_x = new_state.shape[1] / 2
                 img_center_y = new_state.shape[0] / 2
                 distance = np.sqrt((center_x - img_center_x)**2 + (center_y - img_center_y)**2)
@@ -257,7 +274,8 @@ class TargetSearchEnvironment:
                     min_distance = distance
             current_distance = min_distance
         
-        reward = self.calculate_reward(detection_results, self.last_center_distance, action)
+        # 传递图像形状给奖励计算函数
+        reward = self.calculate_reward(detection_results, self.last_center_distance, action, new_state.shape)
         self.last_center_distance = current_distance
         self.last_detection_result = detection_results
         
