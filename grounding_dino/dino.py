@@ -6,6 +6,28 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from modelscope import AutoProcessor, AutoModelForZeroShotObjectDetection 
 
+# 全局变量用于缓存模型和处理器
+_cached_model = None
+_cached_processor = None
+_model_id = "IDEA-Research/grounding-dino-tiny"
+
+def get_model_and_processor():
+    """
+    获取模型和处理器，如果已缓存则直接返回，否则加载并缓存
+    """
+    global _cached_model, _cached_processor, _model_id
+    
+    if _cached_model is None or _cached_processor is None:
+        print(f"正在加载模型 {_model_id}...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _cached_processor = AutoProcessor.from_pretrained(_model_id)
+        _cached_model = AutoModelForZeroShotObjectDetection.from_pretrained(_model_id).to(device)
+        print("模型加载完成！")
+    else:
+        print("使用已缓存的模型")
+    
+    return _cached_model, _cached_processor
+
 def visualize_results(image, results, text_labels):
     """
     可视化检测结果
@@ -79,6 +101,7 @@ def select_image_and_classes():
     text = " ".join(class_list)
     
     return image_path, text
+
 def detect_objects_with_text_transformers(base64_image, text_description):
     """
     使用Grounding DINO检测图像中的目标对象
@@ -98,23 +121,20 @@ def detect_objects_with_text_transformers(base64_image, text_description):
     if image.mode != 'RGB':
         image = image.convert('RGB')
     
-    # 设置模型和设备
-    model_id = "IDEA-Research/grounding-dino-tiny"
+    # 获取缓存的模型和处理器
+    model, processor = get_model_and_processor()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
-    
     # 处理文本描述格式
     text = text_description.strip().lower() + "."
-    
+
     # 处理输入
     inputs = processor(images=image, text=text, return_tensors="pt").to(device)
-    
+
     # 模型推理
     with torch.no_grad():
         outputs = model(**inputs)
-    
+
     # 后处理
     results = processor.post_process_grounded_object_detection(
         outputs,
@@ -123,19 +143,19 @@ def detect_objects_with_text_transformers(base64_image, text_description):
         text_threshold=0.3,
         target_sizes=[image.size[::-1]]
     )
-    
+
     # 格式化结果
     detection_results = []
     if len(results) > 0:
         boxes = results[0]['boxes']
         labels = results[0]['text_labels'] if 'text_labels' in results[0] else results[0]['labels']
         scores = results[0]['scores']
-        
+
         for i in range(len(boxes)):
             box = boxes[i].cpu().numpy()
             score = scores[i].item()
             label = labels[i]
-            
+
             # 只包含置信度高的检测结果
             if score > 0.4:
                 detection_results.append({
@@ -143,39 +163,37 @@ def detect_objects_with_text_transformers(base64_image, text_description):
                     'label': label,
                     'score': score
                 })
-    
-    return detection_results
-def main():
-    # 加载模型
-    model_id = "IDEA-Research/grounding-dino-tiny"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+    return detection_results
+
+def main():
+    # 获取模型和处理器（使用缓存机制）
+    model, processor = get_model_and_processor()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 选择图片和类名
     image_path, text = select_image_and_classes()
     
     if image_path is None or text is None:
         return
-    
+
     # 加载图片并转换为RGB格式
     image = Image.open(image_path)
-    
+
     # 确保图像是RGB格式，解决"Unable to infer channel dimension format"错误
     if image.mode != 'RGB':
         image = image.convert('RGB')
-    
+
     print(f"选择的图片: {image_path}")
     print(f"要识别的类: {text}")
-    
+
     # 处理输入
     inputs = processor(images=image, text=text, return_tensors="pt").to(device)
-    
+
     # 模型推理
     with torch.no_grad():
         outputs = model(**inputs)
-    
+
     # 后处理
     results = processor.post_process_grounded_object_detection(
         outputs,
@@ -184,7 +202,7 @@ def main():
         text_threshold=0.3,
         target_sizes=[image.size[::-1]]
     )
-    
+
     # 打印结果
     print("\n检测结果:")
     for i, result in enumerate(results):
@@ -193,15 +211,15 @@ def main():
         print(f"  Labels: {result['labels']}")
         print(f"  Scores: {result['scores']}")
         print(f"  Text Labels: {result.get('text_labels', 'N/A')}")
-    
+
     # 可视化结果
     result_image = visualize_results(image.copy(), results, text)
-    
+
     # 保存结果
     output_path = "result.jpg"
     result_image.save(output_path)
     print(f"\n结果已保存到 {output_path}")
-    
+
     # 显示图片（可选）
     result_image.show()
 
