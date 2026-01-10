@@ -691,13 +691,23 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
                 scores.append(step_count)
                 total_rewards.append(total_reward)
                 break
-        
-        # 更新PPO策略
+
+        # 每个episode结束后都更新策略
+        print(f"Updating PPO policy for episode {episode+1} (this may take a moment)...")
+        update_start_time = time.time()
         ppo_agent.update(memory)
+        update_end_time = time.time()
+        print(f"Policy updated in {update_end_time - update_start_time:.2f} seconds.")
         
         # 清空记忆
         memory.clear_memory()
         
+        # 每5个episode保存一次模型
+        if (episode + 1) % 5 == 0:
+            checkpoint_path = model_path.replace('.pth', f'_checkpoint_ep_{episode+1}.pth')
+            torch.save(ppo_agent.policy.state_dict(), checkpoint_path)
+            logger.info(f"Checkpoint saved at episode {episode+1}: {checkpoint_path}")
+
         # 每50轮打印一次平均分数
         if episode % 50 == 0 and episode > 0:
             avg_score = np.mean(scores)
@@ -706,12 +716,11 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
     
     logger.info("PPO训练完成！")
     
-    # 保存模型
+    # 保存最终模型
     torch.save(ppo_agent.policy.state_dict(), model_path)
     logger.info(f"PPO模型已保存为 {model_path}")
     
     return ppo_agent
-
 
 def evaluate_trained_ppo_agent(model_path="gate_search_ppo_model.pth", episodes=10, target_description="gate"):
     """
