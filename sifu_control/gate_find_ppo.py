@@ -20,6 +20,8 @@ from collections import deque
 import logging
 from pathlib import Path
 from ultralytics import YOLO
+import pyautogui  # 添加pyautogui库用于按键操作
+
 
 # 添加当前目录到Python路径，确保能正确导入同目录下的模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -75,7 +77,55 @@ class TargetSearchEnvironment:
         
         # 加载YOLO模型
         self.yolo_model = self._load_yolo_model()
-    
+
+    def reset_to_origin(self):
+        """
+        重置到原点操作：按下ESC键，按Q键，按下回车键，检测门，若无门则等待1秒按回车再次检测，最后再按一次回车
+        """
+        self.logger.info("执行重置到原点操作")
+        print("执行重置到原点操作...")
+        
+        # 按键操作序列
+        pyautogui.press('esc')
+        time.sleep(0.5)  # 等待0.5秒
+        pyautogui.press('q')
+        time.sleep(0.5)  # 等待0.5秒
+        pyautogui.press('enter')
+        time.sleep(0.5)  # 等待0.5秒
+        pyautogui.press('enter')
+        time.sleep(0.5)  # 等待0.5秒
+        # 检测门是否存在
+        gate_detected = False
+        while not gate_detected:
+            # 重新截图并检测门
+            new_state = self.capture_screen()
+            detection_results = self.detect_target(new_state)
+            
+            # 检查是否检测到了门
+            for detection in detection_results:
+                if detection['label'].lower() == 'gate' or 'gate' in detection['label'].lower():
+                    gate_detected = True
+                    time.sleep(0.5)
+                    pyautogui.press('enter')
+                    time.sleep(1)
+                    pyautogui.press('enter')
+                    break
+            
+            if not gate_detected:
+                print("未检测到门，等待1秒后按回车重新检测...")
+                time.sleep(1)
+                pyautogui.press('enter')
+                time.sleep(0.5)  # 等待0.5秒
+  # 等待0.5秒
+                        
+        # 最后再按一次回车
+        pyautogui.press('enter')
+        time.sleep(0.5)  # 等待0.5秒
+        pyautogui.press('enter')
+        time.sleep(10)
+        print("重置到原点操作完成")
+        self.logger.info("重置到原点操作完成")
+
     def _load_yolo_model(self):
         """
         加载YOLO模型
@@ -486,7 +536,8 @@ class Memory:
         self.logprobs = []
         self.rewards = []
         self.is_terminals = []
-    
+
+
     def clear_memory(self):
         del self.states[:]
         del self.actions[:]
@@ -664,6 +715,9 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
     scores = deque(maxlen=100)
     total_rewards = deque(maxlen=100)
     
+    # 新增：累积多个episode的数据用于批量更新
+    batch_memory = Memory()
+    
     for episode in range(episodes):
         state = env.reset()
         total_reward = 0
@@ -677,9 +731,17 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
             # 执行动作
             next_state, reward, done, detection_results = env.step(action)
             
-            # 存储奖励和终止标志
+            # 存储奖励和终止标志到当前episode的memory
             memory.rewards.append(reward)
             memory.is_terminals.append(done)
+            
+            # 将当前状态转换为tensor格式并添加到memory
+            processed_state = ppo_agent._preprocess_state(state)
+            memory.states.append(processed_state)
+            
+            # 存储动作和对数概率
+            memory.actions.append(torch.tensor(action))
+            memory.logprobs.append(torch.tensor(0.0))  # 实际上在act函数中会更新这个值，这里只是一个占位符
             
             state = next_state
             total_reward += reward
@@ -690,20 +752,34 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
                 print(f"Episode: {episode+1}/{episodes}, Score: {step_count}, Total Reward: {total_reward:.2f}")
                 scores.append(step_count)
                 total_rewards.append(total_reward)
+                
+                # 在每个episode结束后执行重置到原点操作
+                env.reset_to_origin()
                 break
 
-        # 每个episode结束后都更新策略
-        print(f"Updating PPO policy for episode {episode+1} (this may take a moment)...")
-        update_start_time = time.time()
-        ppo_agent.update(memory)
-        update_end_time = time.time()
-        print(f"Policy updated in {update_end_time - update_start_time:.2f} seconds.")
+        # 将当前episode的数据添加到批量memory中
+        batch_memory.states.extend(memory.states)
+        batch_memory.actions.extend(memory.actions)
+        batch_memory.logprobs.extend(memory.logprobs)
+        batch_memory.rewards.extend(memory.rewards)
+        batch_memory.is_terminals.extend(memory.is_terminals)
         
-        # 清空记忆
+        # 清空当前episode的memory
         memory.clear_memory()
         
-        # 每5个episode保存一次模型
-        if (episode + 1) % 5 == 0:
+        # 每10个episode更新一次策略
+        if (episode + 1) % 10 == 0:
+            print(f"Updating PPO policy for episodes {(episode-9)} to {episode+1} (this may take a moment)...")
+            update_start_time = time.time()
+            ppo_agent.update(batch_memory)
+            update_end_time = time.time()
+            print(f"Policy updated in {update_end_time - update_start_time:.2f} seconds.")
+            
+            # 清空批量memory
+            batch_memory.clear_memory()
+        
+        # 每10个episode保存一次模型
+        if (episode + 1) % 10 == 0:
             checkpoint_path = model_path.replace('.pth', f'_checkpoint_ep_{episode+1}.pth')
             torch.save(ppo_agent.policy.state_dict(), checkpoint_path)
             logger.info(f"Checkpoint saved at episode {episode+1}: {checkpoint_path}")
@@ -714,6 +790,12 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
             avg_total_reward = np.mean(total_rewards)
             logger.info(f"Episode {episode}, Average Score: {avg_score:.2f}, Average Total Reward: {avg_total_reward:.2f}")
     
+    # 如果还有剩余的episode数据未更新，最后再更新一次
+    if len(batch_memory.rewards) > 0:
+        print(f"Updating final PPO policy with remaining episodes...")
+        ppo_agent.update(batch_memory)
+        batch_memory.clear_memory()
+    
     logger.info("PPO训练完成！")
     
     # 保存最终模型
@@ -721,7 +803,6 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
     logger.info(f"PPO模型已保存为 {model_path}")
     
     return ppo_agent
-
 def evaluate_trained_ppo_agent(model_path="gate_search_ppo_model.pth", episodes=10, target_description="gate"):
     """
     评估已训练好的PPO模型性能
@@ -785,6 +866,9 @@ def evaluate_trained_ppo_agent(model_path="gate_search_ppo_model.pth", episodes=
             'success': success
         }
         evaluation_results.append(result)
+        
+        # 在每个episode结束后执行重置到原点操作
+        env.reset_to_origin()
         
         logger.info(f"Episode {episode+1} 完成 - Steps: {step_count}, Total Reward: {total_reward}, Success: {success}")
     
@@ -867,6 +951,9 @@ def load_and_test_ppo_agent(model_path="gate_search_ppo_model.pth", target_descr
                 logger.info("未能找到目标")
                 return {"status": "partial_success", "result": f"未能找到{target_description}", "steps": step_count, "total_reward": total_reward}
     
+    # 执行重置到原点操作
+    env.reset_to_origin()
+    
     result = {"status": "timeout", "result": f"测试完成但未找到目标 - Steps: {step_count}, Total Reward: {total_reward}"}
     logger.info(result["result"])
     return result
@@ -924,6 +1011,9 @@ def find_gate_with_ppo(target_description="gate"):
             else:
                 logger.info("未能找到目标")
                 return "未能找到目标"
+    
+    # 执行重置到原点操作
+    env.reset_to_origin()
     
     result = f"测试完成 - Steps: {step_count}, Total Reward: {total_reward}"
     logger.info(result)
