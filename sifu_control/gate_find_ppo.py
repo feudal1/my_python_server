@@ -26,7 +26,7 @@ import pyautogui  # 添加pyautogui库用于按键操作
 # 添加当前目录到Python路径，确保能正确导入同目录下的模块
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# 导入现有的移动控制器
+# 导入现有的移动控制器w
 from control_api_tool import ImprovedMovementController
 
 # 添加项目根目录到路径，以便导入其他模块
@@ -79,9 +79,6 @@ class TargetSearchEnvironment:
         self.MIN_GATE_AREA = 30000  # 根据实际情况调整，降低阈值以便更容易达成目标
         self.CENTER_THRESHOLD = 80  # 放宽居中要求
         
-        # 默认操作时间
-        self.DEFAULT_MOVE_DURATION = 0.2  # 移动持续时间
-        self.DEFAULT_TURN_DURATION = 0.2  # 转向持续时间
 
     def reset_to_origin(self):
         """
@@ -364,29 +361,18 @@ class TargetSearchEnvironment:
         return reward, max_area
     
   
-    def step(self, action, duration=None):
+    def step(self, action):
         """
         执行动作并返回新的状态、奖励和是否结束
         动作空间: 0-forward, 1-backward, 2-turn_left, 3-turn_right, 4-strafe_left, 5-strafe_right
         """
         action_names = ["forward", "backward", "turn_left", "turn_right", "strafe_left", "strafe_right"]
-        self.logger.debug(f"执行动作: {action_names[action]}, 持续时间: {duration if duration is not None else self.DEFAULT_MOVE_DURATION}s")
+        self.logger.debug(f"执行动作: {action_names[action]}")
         
         # 动态调整动作步长
         current_area = self.last_area
         move_forward_step = 2
         turn_angle = 30
-        
-        # 根据AI决定的持续时间调整动作幅度
-        if duration is not None:
-            # 根据AI决定的持续时间调整动作幅度
-            # duration已经在合适的范围内（例如0.1-1.0秒）
-            actual_duration = duration
-        else:
-            # 使用默认持续时间
-            actual_duration = self.DEFAULT_MOVE_DURATION
-            if action in [2, 3]:  # turn_left 或 turn_right
-                actual_duration = self.DEFAULT_TURN_DURATION
         
         # 如果目标已经比较大，使用更精细的动作
         if current_area > 20000:  # 目标已经比较近
@@ -395,17 +381,19 @@ class TargetSearchEnvironment:
         
         # 执行动作
         if action == 0:  # forward
-            self.controller.move_forward(move_forward_step, actual_duration)
+            self.controller.move_forward(move_forward_step)
         elif action == 1:  # backward
-            self.controller.move_backward(max(1, move_forward_step // 2), actual_duration)
+            self.controller.move_backward(max(1, move_forward_step // 2))
         elif action == 2:  # turn_left
-            self.controller.turn_left(turn_angle, actual_duration)
+            self.controller.turn_left(turn_angle)
         elif action == 3:  # turn_right
-            self.controller.turn_right(turn_angle, actual_duration)
+            self.controller.turn_right(turn_angle)
         elif action == 4:  # strafe_left
-            self.controller.strafe_left(max(1, move_forward_step // 2), actual_duration)
+            self.controller.strafe_left(max(1, move_forward_step // 2))
         elif action == 5:  # strafe_right
-            self.controller.strafe_right(max(1, move_forward_step // 2), actual_duration)
+            self.controller.strafe_right(max(1, move_forward_step // 2))
+        
+        time.sleep(0.2)  # 保持延迟
         
         # 获取新状态（截图）
         new_state = self.capture_screen()
@@ -470,7 +458,7 @@ class TargetSearchEnvironment:
         detected_targets = len(detection_results) if detection_results else 0
         print(f"Step {self.step_count}, Area: {current_area:.2f}, Reward: {reward:.2f}, "
               f"Targets Detected: {detected_targets}, Distance to Center: {current_distance:.2f}, "
-              f"Action: {action_names[action]}, Duration: {actual_duration:.3f}, Done: {done}")
+              f"Done: {done}")
         
         # 更新位置历史，记录当前状态的特征（如检测结果数量）
         state_feature = len(detection_results)  # 这里用检测到的对象数量作为状态特征
@@ -502,7 +490,7 @@ class TargetSearchEnvironment:
 
 class ActorCritic(nn.Module):
     """
-    PPO使用的Actor-Critic网络，扩展为同时预测动作和持续时间
+    PPO使用的Actor-Critic网络
     """
     def __init__(self, input_channels=3, action_space=6, image_height=480, image_width=640):
         super(ActorCritic, self).__init__()
@@ -523,19 +511,11 @@ class ActorCritic(nn.Module):
         # 全连接层 - 输入大小是固定的，因为池化层输出固定尺寸
         conv_out_size = 64 * 10 * 10  # 64个通道 * 10 * 10 = 6400
         
-        # Actor (策略网络) - 分别输出动作概率分布和持续时间
-        self.action_layer = nn.Sequential(
+        # Actor (策略网络) - 输出动作概率分布
+        self.actor = nn.Sequential(
             nn.Linear(conv_out_size, 512),
             nn.ReLU(),
             nn.Linear(512, action_space)
-        )
-        
-        # 持续时间预测层 - 输出一个连续值表示时间长度
-        self.duration_layer = nn.Sequential(
-            nn.Linear(conv_out_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, 1),  # 输出一个值
-            nn.Sigmoid()  # 限制在0-1之间
         )
         
         # Critic (价值网络) - 输出状态价值
@@ -550,35 +530,28 @@ class ActorCritic(nn.Module):
         x = self.adaptive_pool(x)  # 确保输出尺寸一致
         x = x.view(x.size(0), -1)  # 展平
         
-        # 分别计算动作概率、持续时间和状态价值
-        action_probs = F.softmax(self.action_layer(x), dim=-1)
-        normalized_duration = self.duration_layer(x)  # 在0-1之间的标准化时间
+        # 分别计算动作概率和状态价值
+        action_probs = F.softmax(self.actor(x), dim=-1)
         state_value = self.critic(x)
         
-        # 将标准化时间映射到实际范围（例如0.1秒到1.0秒）
-        min_duration = 0.1
-        max_duration = 1.0
-        actual_duration = min_duration + normalized_duration * (max_duration - min_duration)
-        
-        return action_probs, actual_duration, state_value
+        return action_probs, state_value
 
 
 class Memory:
     """
-    存储智能体的经验数据，扩展为包含持续时间
+    存储智能体的经验数据
     """
     def __init__(self):
         self.states = []
         self.actions = []
-        self.durations = []  # 新增：存储持续时间
         self.logprobs = []
         self.rewards = []
         self.is_terminals = []
 
+
     def clear_memory(self):
         del self.states[:]
         del self.actions[:]
-        del self.durations[:]  # 新增：清空持续时间
         del self.logprobs[:]
         del self.rewards[:]
         del self.is_terminals[:]
@@ -586,7 +559,7 @@ class Memory:
 
 class PPOAgent:
     """
-    PPO智能体，扩展为同时学习动作和持续时间
+    PPO智能体
     """
     def __init__(self, state_dim, action_dim, lr=0.0003, betas=(0.9, 0.999), gamma=0.99, K_epochs=40, eps_clip=0.1):
         self.lr = lr
@@ -598,9 +571,9 @@ class PPOAgent:
         # 修正：不再使用state_dim参数中的高度和宽度，而是使用固定尺寸
         input_channels = 3
         height, width = 480, 640  # 固定网络输入尺寸
-        self.policy = ActorCritic(input_channels, action_dim)  # 包含动作和持续时间输出
+        self.policy = ActorCritic(input_channels, action_dim, height, width)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr, betas=betas)
-        self.policy_old = ActorCritic(input_channels, action_dim)  # 包含动作和持续时间输出
+        self.policy_old = ActorCritic(input_channels, action_dim, height, width)
         self.policy_old.load_state_dict(self.policy.state_dict())
         
         self.MseLoss = nn.MSELoss()
@@ -635,12 +608,11 @@ class PPOAgent:
             # memory.states中的每个元素应该是一个形状为(C, H, W)的张量
             old_states = torch.stack(memory.states).detach()
             
-            # 确保所有动作、持续时间和对数概率张量形状一致
+            # 确保所有动作和对数概率张量形状一致
             old_actions_list = []
-            old_durations_list = []  # 新增：持续时间列表
             old_logprobs_list = []
             
-            for action, duration, logprob in zip(memory.actions, memory.durations, memory.logprobs):
+            for action, logprob in zip(memory.actions, memory.logprobs):
                 # 确保动作是标量张量
                 if not isinstance(action, torch.Tensor):
                     action = torch.tensor(action, dtype=torch.long)
@@ -649,15 +621,6 @@ class PPOAgent:
                 elif action.dim() == 1 and action.numel() == 1:  # 如果是单元素一维张量
                     action = action.item()
                     action = torch.tensor(action, dtype=torch.long)
-                
-                # 确保持续时间是标量张量 (新增)
-                if not isinstance(duration, torch.Tensor):
-                    duration = torch.tensor(duration, dtype=torch.float32)
-                elif duration.dim() == 0:  # 如果已经是标量
-                    pass
-                elif duration.dim() == 1 and duration.numel() == 1:  # 如果是单元素一维张量
-                    duration = duration.item()
-                    duration = torch.tensor(duration, dtype=torch.float32)
                 
                 # 确保对数概率是标量张量
                 if not isinstance(logprob, torch.Tensor):
@@ -669,26 +632,23 @@ class PPOAgent:
                     logprob = torch.tensor(logprob, dtype=torch.float32)
                 
                 old_actions_list.append(action)
-                old_durations_list.append(duration)  # 新增：添加持续时间
                 old_logprobs_list.append(logprob)
             
             # 现在堆叠处理后的张量
             old_actions = torch.stack(old_actions_list).detach()
-            old_durations = torch.stack(old_durations_list).detach()  # 新增：持续时间张量
             old_logprobs = torch.stack(old_logprobs_list).detach()
         
         except RuntimeError as e:
             self.logger.error(f"Error stacking tensors: {e}")
             self.logger.error(f"State shapes: {[s.shape for s in memory.states[:5]]}")
             self.logger.error(f"Action shapes: {[a.shape if isinstance(a, torch.Tensor) else type(a) for a in memory.actions[:5]]}")
-            self.logger.error(f"Duration shapes: {[d.shape if isinstance(d, torch.Tensor) else type(d) for d in memory.durations[:5]]}")  # 新增
             self.logger.error(f"Logprob shapes: {[l.shape if isinstance(l, torch.Tensor) else type(l) for l in memory.logprobs[:5]]}")
             return
         
         # K epochs更新策略 - 减少K_epochs以提高稳定性
         for _ in range(self.K_epochs):
             # 计算优势
-            logprobs, durations, state_values = self.policy(old_states)  # 获取动作概率和持续时间
+            logprobs, state_values = self.policy(old_states)
             dist = torch.distributions.Categorical(logprobs)
             entropy = dist.entropy().mean()
             
@@ -709,9 +669,6 @@ class PPOAgent:
             # 计算价值损失
             critic_loss = self.MseLoss(state_values.squeeze(-1), rewards)
             
-            # 计算持续时间的损失（可选，如果我们有目标持续时间）
-            # 这里我们暂时不添加持续时间的直接损失，因为它是通过奖励间接优化的
-            
             # 总损失
             loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy  # 保持熵权重不变
             
@@ -727,7 +684,7 @@ class PPOAgent:
     
     def act(self, state, memory):
         """
-        根据当前策略选择动作和持续时间
+        根据当前策略选择动作
         """
         state = self._preprocess_state(state)
         
@@ -735,28 +692,27 @@ class PPOAgent:
         state_batch = state.unsqueeze(0)  # 添加批次维度
         
         with torch.no_grad():
-            action_probs, duration, state_value = self.policy_old(state_batch)
+            action_probs, state_value = self.policy_old(state_batch)
             dist = torch.distributions.Categorical(action_probs)
             action = dist.sample()
             action_logprob = dist.log_prob(action)
         
-        # 存储状态、动作、持续时间和对数概率
+        # 存储状态、动作和对数概率
         # 不要存储带批次维度的状态，只存储原始状态
         memory.states.append(state)  # 不带批次维度
         memory.actions.append(action.item())  # 确保是标量值
-        memory.durations.append(duration.item())  # 新增：存储持续时间
         memory.logprobs.append(action_logprob.item())  # 确保是标量值
         
-        return action.item(), duration.item()  # 返回动作和持续时间
+        return action.item()
     
     def evaluate(self, state):
         """
         评估状态-动作对的价值
         """
-        action_probs, durations, state_value = self.policy(state)
+        action_probs, state_value = self.policy(state)
         dist = torch.distributions.Categorical(action_probs)
         
-        return dist, durations, state_value.squeeze(-1)  # 返回动作分布、持续时间和状态值
+        return dist, state_value.squeeze(-1)
     
     def _preprocess_state(self, state):
         """
@@ -816,7 +772,6 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
     scores = deque(maxlen=100)
     total_rewards = deque(maxlen=100)
     final_areas = deque(maxlen=100)  # 记录最终门面积
-    avg_durations = deque(maxlen=100)  # 记录平均持续时间
     
     # 新增：累积多个episode的数据用于批量更新
     batch_memory = Memory()
@@ -825,18 +780,16 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
         state = env.reset()
         total_reward = 0
         step_count = 0
-        episode_durations = []  # 记录本episode的持续时间
         
         done = False
         final_area = 0  # 记录本episode的最终门面积
         
         while not done:
-            # 选择动作和持续时间 - 这会在act方法中自动添加状态、动作、持续时间和对数概率到memory
-            action, duration = ppo_agent.act(state, memory)
-            episode_durations.append(duration)
+            # 选择动作 - 这会在act方法中自动添加状态、动作和对数概率到memory
+            action = ppo_agent.act(state, memory)
             
             # 执行动作
-            next_state, reward, done, detection_results = env.step(action, duration)
+            next_state, reward, done, detection_results = env.step(action)
             
             # 存储奖励和终止标志到当前episode的memory
             memory.rewards.append(reward)
@@ -851,13 +804,11 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
                 final_area = max(d['width'] * d['height'] for d in detection_results)
             
             if done:
-                avg_duration = np.mean(episode_durations) if episode_durations else 0
-                logger.info(f"Episode: {episode}, Score: {step_count}, Total Reward: {total_reward:.2f}, Final Area: {final_area:.2f}, Avg Duration: {avg_duration:.3f}s")
-                print(f"Episode: {episode+1}/{episodes}, Score: {step_count}, Total Reward: {total_reward:.2f}, Final Area: {final_area:.2f}, Avg Duration: {avg_duration:.3f}s")
+                logger.info(f"Episode: {episode}, Score: {step_count}, Total Reward: {total_reward:.2f}, Final Area: {final_area:.2f}")
+                print(f"Episode: {episode+1}/{episodes}, Score: {step_count}, Total Reward: {total_reward:.2f}, Final Area: {final_area:.2f}")
                 scores.append(step_count)
                 total_rewards.append(total_reward)
                 final_areas.append(final_area)
-                avg_durations.append(avg_duration)
                 
                 # 在每个episode结束后执行重置到原点操作
                 env.reset_to_origin()
@@ -866,7 +817,6 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
         # 将当前episode的数据添加到批量memory中
         batch_memory.states.extend(memory.states)
         batch_memory.actions.extend(memory.actions)
-        batch_memory.durations.extend(memory.durations)  # 新增：添加持续时间
         batch_memory.logprobs.extend(memory.logprobs)
         batch_memory.rewards.extend(memory.rewards)
         batch_memory.is_terminals.extend(memory.is_terminals)
@@ -896,8 +846,7 @@ def train_gate_search_ppo_agent(episodes=200, model_path="gate_search_ppo_model.
             avg_score = np.mean(scores)
             avg_total_reward = np.mean(total_rewards)
             avg_final_area = np.mean(final_areas) if final_areas else 0
-            avg_duration = np.mean(avg_durations) if avg_durations else 0
-            logger.info(f"Episode {episode}, Average Score: {avg_score:.2f}, Average Total Reward: {avg_total_reward:.2f}, Average Final Area: {avg_final_area:.2f}, Average Duration: {avg_duration:.3f}s")
+            logger.info(f"Episode {episode}, Average Score: {avg_score:.2f}, Average Total Reward: {avg_total_reward:.2f}, Average Final Area: {avg_final_area:.2f}")
     
     # 如果还有剩余的episode数据未更新，最后再更新一次
     if len(batch_memory.rewards) > 0:
@@ -947,21 +896,19 @@ def evaluate_trained_ppo_agent(model_path="gate_search_ppo_model.pth", episodes=
         total_reward = 0
         step_count = 0
         success = False
-        episode_durations = []  # 记录本episode的持续时间
         
         done = False
         while not done and step_count < 50:
-            action, duration = ppo_agent.act(state, memory)
-            episode_durations.append(duration)
+            action = ppo_agent.act(state, memory)
             
             # 清空临时记忆中的数据，因为我们只是在评估
             memory.clear_memory()
             
             # 打印动作
             action_names = ["forward", "backward", "turn_left", "turn_right", "strafe_left", "strafe_right"]
-            logger.info(f"Episode {episode+1}, Step {step_count}: Taking action - {action_names[action]}, Duration: {duration:.3f}s")
+            logger.info(f"Episode {episode+1}, Step {step_count}: Taking action - {action_names[action]}")
             
-            state, reward, done, detection_results = env.step(action, duration)
+            state, reward, done, detection_results = env.step(action)
             total_reward += reward
             step_count += 1
             
@@ -988,28 +935,25 @@ def evaluate_trained_ppo_agent(model_path="gate_search_ppo_model.pth", episodes=
                 success = True
                 logger.info(f"Episode {episode+1}: 成功找到目标！")
         
-        avg_duration = np.mean(episode_durations) if episode_durations else 0
         result = {
             'episode': episode + 1,
             'steps': step_count,
             'total_reward': total_reward,
             'success': success,
-            'final_area': current_area,
-            'avg_duration': avg_duration
+            'final_area': current_area
         }
         evaluation_results.append(result)
         
         # 在每个episode结束后执行重置到原点操作
         env.reset_to_origin()
         
-        logger.info(f"Episode {episode+1} 完成 - Steps: {step_count}, Total Reward: {total_reward}, Success: {success}, Final Area: {current_area}, Avg Duration: {avg_duration:.3f}s")
+        logger.info(f"Episode {episode+1} 完成 - Steps: {step_count}, Total Reward: {total_reward}, Success: {success}, Final Area: {current_area}")
     
     # 计算总体统计信息
     successful_episodes = sum(1 for r in evaluation_results if r['success'])
     avg_steps = np.mean([r['steps'] for r in evaluation_results])
     avg_reward = np.mean([r['total_reward'] for r in evaluation_results])
     avg_final_area = np.mean([r['final_area'] for r in evaluation_results])
-    avg_duration_all = np.mean([r['avg_duration'] for r in evaluation_results])
     
     stats = {
         'total_episodes': episodes,
@@ -1018,12 +962,11 @@ def evaluate_trained_ppo_agent(model_path="gate_search_ppo_model.pth", episodes=
         'avg_steps': avg_steps,
         'avg_reward': avg_reward,
         'avg_final_area': avg_final_area,
-        'avg_duration': avg_duration_all,
         'details': evaluation_results
     }
     
     logger.info(f"PPO评估完成 - 总体成功率: {stats['success_rate']*100:.2f}% ({successful_episodes}/{episodes})")
-    logger.info(f"平均步数: {avg_steps:.2f}, 平均奖励: {avg_reward:.2f}, 平均最终面积: {avg_final_area:.2f}, 平均持续时间: {avg_duration_all:.3f}s")
+    logger.info(f"平均步数: {avg_steps:.2f}, 平均奖励: {avg_reward:.2f}, 平均最终面积: {avg_final_area:.2f}")
     
     return stats
 
@@ -1058,23 +1001,21 @@ def load_and_test_ppo_agent(model_path="gate_search_ppo_model.pth", target_descr
     
     total_reward = 0
     step_count = 0
-    episode_durations = []  # 记录持续时间
     done = False
     
     logger.info("开始测试PPO智能体...")
     
     while not done and step_count < 50:
-        action, duration = ppo_agent.act(state, memory)
-        episode_durations.append(duration)
+        action = ppo_agent.act(state, memory)
         
         # 清空临时记忆中的数据，因为我们只是在评估
         memory.clear_memory()
         
         # 打印动作
         action_names = ["forward", "backward", "turn_left", "turn_right", "strafe_left", "strafe_right"]
-        logger.info(f"Step {step_count}: Taking action - {action_names[action]}, Duration: {duration:.3f}s")
+        logger.info(f"Step {step_count}: Taking action - {action_names[action]}")
         
-        state, reward, done, detection_results = env.step(action, duration)
+        state, reward, done, detection_results = env.step(action)
         total_reward += reward
         step_count += 1
         
@@ -1098,19 +1039,16 @@ def load_and_test_ppo_agent(model_path="gate_search_ppo_model.pth", target_descr
                     current_area = area
         
         if done and detection_results and current_distance < env.CENTER_THRESHOLD and current_area > env.MIN_GATE_AREA:
-            avg_duration = np.mean(episode_durations) if episode_durations else 0
             logger.info("成功找到目标！")
-            return {"status": "success", "result": f"成功找到{target_description}！", "steps": step_count, "total_reward": total_reward, "avg_duration": avg_duration}
+            return {"status": "success", "result": f"成功找到{target_description}！", "steps": step_count, "total_reward": total_reward}
         elif done:
-            avg_duration = np.mean(episode_durations) if episode_durations else 0
             logger.info("未能找到目标")
-            return {"status": "partial_success", "result": f"未能找到{target_description}", "steps": step_count, "total_reward": total_reward, "avg_duration": avg_duration}
+            return {"status": "partial_success", "result": f"未能找到{target_description}", "steps": step_count, "total_reward": total_reward}
     
     # 执行重置到原点操作
     env.reset_to_origin()
     
-    avg_duration = np.mean(episode_durations) if episode_durations else 0
-    result = {"status": "timeout", "result": f"测试完成但未找到目标 - Steps: {step_count}, Total Reward: {total_reward:.2f}, Avg Duration: {avg_duration:.3f}s"}
+    result = {"status": "timeout", "result": f"测试完成但未找到目标 - Steps: {step_count}, Total Reward: {total_reward}"}
     logger.info(result["result"])
     return result
 
@@ -1139,23 +1077,21 @@ def find_gate_with_ppo(target_description="gate"):
     
     total_reward = 0
     step_count = 0
-    episode_durations = []  # 记录持续时间
     done = False
     
     logger.info("开始测试PPO智能体...")
     
     while not done and step_count < 50:
-        action, duration = trained_agent.act(state, memory)
-        episode_durations.append(duration)
+        action = trained_agent.act(state, memory)
         
         # 清空临时记忆中的数据，因为我们只是在评估
         memory.clear_memory()
         
         # 打印动作
         action_names = ["forward", "backward", "turn_left", "turn_right", "strafe_left", "strafe_right"]
-        logger.info(f"Step {step_count}: Taking action - {action_names[action]}, Duration: {duration:.3f}s")
+        logger.info(f"Step {step_count}: Taking action - {action_names[action]}")
         
-        state, reward, done, detection_results = env.step(action, duration)
+        state, reward, done, detection_results = env.step(action)
         total_reward += reward
         step_count += 1
         
@@ -1179,19 +1115,16 @@ def find_gate_with_ppo(target_description="gate"):
                     current_area = area
         
         if done and detection_results and current_distance < env.CENTER_THRESHOLD and current_area > env.MIN_GATE_AREA:
-            avg_duration = np.mean(episode_durations) if episode_durations else 0
             logger.info("成功找到目标！")
-            return f"成功找到目标！总步数: {step_count}, 总奖励: {total_reward:.2f}, 平均持续时间: {avg_duration:.3f}s"
+            return "成功找到目标！"
         elif done:
-            avg_duration = np.mean(episode_durations) if episode_durations else 0
             logger.info("未能找到目标")
-            return f"未能找到目标 - 总步数: {step_count}, 总奖励: {total_reward:.2f}, 平均持续时间: {avg_duration:.3f}s"
+            return "未能找到目标"
     
     # 执行重置到原点操作
     env.reset_to_origin()
     
-    avg_duration = np.mean(episode_durations) if episode_durations else 0
-    result = f"测试完成 - 总步数: {step_count}, 总奖励: {total_reward:.2f}, 平均持续时间: {avg_duration:.3f}s"
+    result = f"测试完成 - Steps: {step_count}, Total Reward: {total_reward}"
     logger.info(result)
     return result
 
