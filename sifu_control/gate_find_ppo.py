@@ -358,7 +358,7 @@ class TargetSearchEnvironment:
         
         # 确保等待时间不会太长
         wait_time = min(wait_time, 1.5)  # 限制最大等待时间为1.5秒
-       
+    
 
         # 获取新状态（截图）
         new_state = self.capture_screen()
@@ -404,23 +404,23 @@ class TargetSearchEnvironment:
         # 更新步数
         self.step_count += 1
         
-        # 检查是否成功找到门（新条件）
-        gate_found_and_close = (
-            detection_results 
-            and current_area > self.MIN_GATE_AREA
+        # 检查是否检测到climb类别
+        climb_detected = any(
+            detection['label'].lower() == 'climb' or 'climb' in detection['label'].lower()
+            for detection in detection_results
         )
         
-        # 检查是否结束
-        done = self.step_count >= self.max_steps or gate_found_and_close
-        
-        # 如果成功找到门，给予额外奖励
-        if gate_found_and_close:
+
+        done=climb_detected
+        # 如果检测到climb，给予额外奖励
+        if climb_detected:
             # 计算快速完成的额外奖励：基于剩余步数给予额外奖励
             remaining_steps = self.max_steps - self.step_count
             speed_bonus = remaining_steps * 5  # 适度调整速度奖励
-            reward += 80 + speed_bonus  # 适度调整成功奖励
-            self.logger.info(f"成功找到目标！基础奖励: 80.0, 速度奖励: {speed_bonus}, 当前面积: {current_area}")
-        
+            reward += 100 + speed_bonus  # 给予更高的climb奖励
+            self.logger.info(f"检测到climb类别！基础奖励: 100.0, 速度奖励: {speed_bonus}")
+        # 如果成功找到门，给予额外奖励
+
         # 输出每步得分
         detected_targets = len(detection_results) if detection_results else 0
         print(f"Step {self.step_count}, Area: {current_area:.2f}, Reward: {reward:.2f}, "
@@ -435,8 +435,9 @@ class TargetSearchEnvironment:
             self.position_history.pop(0)
         
         if done:
-            if gate_found_and_close:
-                self.logger.info(f"在第 {self.step_count} 步成功找到目标，面积: {current_area}")
+            if climb_detected:
+                self.logger.info(f"在第 {self.step_count} 步检测到 climb 类别")
+
             else:
                 self.logger.info(f"达到最大步数 {self.max_steps}")
         
