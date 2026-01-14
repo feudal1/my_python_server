@@ -411,7 +411,7 @@ class TargetSearchEnvironment:
         )
         
 
-        done=climb_detected
+        done=climb_detected or self.step_count >= self.max_steps
         # 如果检测到climb，给予额外奖励
         if climb_detected:
             # 计算快速完成的额外奖励：基于剩余步数给予额外奖励
