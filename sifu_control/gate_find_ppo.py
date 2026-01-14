@@ -478,6 +478,9 @@ def execute_ppo_tool(tool_name, *args):
     elif tool_name == "train_gate_search_ppo_agent":
         from ppo_networks import train_gate_search_ppo_agent_medium
         func = train_gate_search_ppo_agent_medium
+    elif tool_name == "continue_train_ppo_agent":
+        from ppo_networks import continue_training_ppo_agent
+        func = continue_training_ppo_agent
     elif tool_name == "evaluate_trained_ppo_agent":
         from ppo_networks import evaluate_trained_ppo_agent_medium
         func = evaluate_trained_ppo_agent_medium
@@ -496,6 +499,11 @@ def execute_ppo_tool(tool_name, *args):
             model_path = args[1] if len(args) > 1 else "gate_search_ppo_model_medium.pth"
             target_desc = args[2] if len(args) > 2 else "gate"
             result = func(episodes, model_path, target_desc)
+        elif tool_name == "continue_train_ppo_agent":
+            model_path = args[0] if args else "gate_search_ppo_model_medium.pth"
+            additional_episodes = int(args[1]) if len(args) > 1 else 20
+            target_desc = args[2] if len(args) > 2 else "gate"
+            result = func(model_path, additional_episodes, target_desc)
         elif tool_name == "evaluate_trained_ppo_agent":
             model_path = args[0] if args else "gate_search_ppo_model_medium.pth"
             episodes = int(args[1]) if len(args) > 1 else 5
@@ -517,7 +525,6 @@ def execute_ppo_tool(tool_name, *args):
         import traceback
         traceback.print_exc()  # 添加详细的错误追踪
         return {"status": "error", "message": f"执行PPO工具时出错: {str(e)}"}
-
 
 def main():
     """

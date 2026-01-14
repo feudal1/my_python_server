@@ -5,6 +5,8 @@ import numpy as np
 import logging
 import time
 import os
+import glob
+import re
 from collections import deque
 from torch.distributions import Categorical
 
@@ -271,10 +273,67 @@ class PPOAgent:
         
         # 保持原始尺寸
         return state_tensor
+    
+    def save_checkpoint(self, filepath, episode, optimizer_state_dict=None):
+        """
+        保存模型检查点
+        """
+        checkpoint = {
+            'episode': episode,
+            'policy_state_dict': self.policy.state_dict(),
+            'policy_old_state_dict': self.policy_old.state_dict(),
+            'optimizer_state_dict': optimizer_state_dict or self.optimizer.state_dict(),
+        }
+        torch.save(checkpoint, filepath)
+        print(f"模型检查点已保存: {filepath}")
+    
+    def load_checkpoint(self, filepath):
+        """
+        加载模型检查点
+        """
+        if os.path.exists(filepath):
+            checkpoint = torch.load(filepath, map_location=torch.device('cpu'))
+            self.policy.load_state_dict(checkpoint['policy_state_dict'])
+            self.policy_old.load_state_dict(checkpoint['policy_old_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_episode = checkpoint.get('episode', 0)
+            print(f"模型检查点已加载，从第 {start_episode} 轮开始继续训练")
+            return start_episode + 1
+        else:
+            print(f"检查点文件不存在: {filepath}")
+            return 0
+
+
+def find_latest_checkpoint(model_path):
+    """
+    查找最新的检查点文件
+    """
+    model_dir = os.path.dirname(model_path)
+    model_base_name = os.path.basename(model_path).replace('.pth', '')
+    
+    # 查找所有相关的检查点文件
+    checkpoint_pattern = re.compile(rf'{re.escape(model_base_name)}_checkpoint_ep_(\d+)\.pth$')
+    found_checkpoints = []
+    
+    if os.path.exists(model_dir):
+        for file in os.listdir(model_dir):
+            match = checkpoint_pattern.match(file)
+            if match:
+                full_path = os.path.join(model_dir, file)
+                epoch_num = int(match.group(1))
+                found_checkpoints.append((full_path, epoch_num))
+    
+    if found_checkpoints:
+        # 返回具有最高epoch编号的检查点
+        latest_checkpoint = max(found_checkpoints, key=lambda x: x[1])
+        return latest_checkpoint[0]
+    
+    return None
+
 
 def train_gate_search_ppo_agent_medium(episodes=50, model_path="gate_search_ppo_model_medium.pth", target_description="gate"):
     """
-    中等规模门搜索PPO智能体训练
+    中等规模门搜索PPO智能体训练 - 默认查找旧检查点并继续训练
     """
     logger = logging.getLogger(__name__)
     logger.info(f"开始训练中等规模门搜索PPO智能体，目标: {target_description}")
@@ -302,6 +361,25 @@ def train_gate_search_ppo_agent_medium(episodes=50, model_path="gate_search_ppo_
         K_epochs=4,      # 适度更新轮数
         eps_clip=0.2     # 适度PPO裁剪
     )
+    
+    start_episode = 0
+    # 自动查找最新的检查点文件
+    latest_checkpoint = find_latest_checkpoint(model_path)
+    
+    if latest_checkpoint:
+        # 从检查点加载
+        start_episode = ppo_agent.load_checkpoint(latest_checkpoint)
+        logger.info(f"从检查点继续训练: {latest_checkpoint}, 从第 {start_episode} 轮开始")
+    elif os.path.exists(model_path):
+        # 检查点不存在，但主模型文件存在，从主模型加载
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        try:
+            ppo_agent.policy.load_state_dict(torch.load(model_path, map_location=device))
+            ppo_agent.policy_old.load_state_dict(torch.load(model_path, map_location=device))
+            logger.info(f"从预训练模型加载: {model_path}")
+        except Exception as e:
+            logger.warning(f"加载主模型失败: {e}")
+    
     memory = Memory()
     
     scores = deque(maxlen=50)
@@ -310,7 +388,10 @@ def train_gate_search_ppo_agent_medium(episodes=50, model_path="gate_search_ppo_
     
     batch_memory = Memory()
     
-    for episode in range(episodes):
+    # 如果从检查点开始，调整总训练轮数
+    total_training_episodes = start_episode + episodes
+    
+    for episode in range(start_episode, total_training_episodes):
         state = env.reset()
         total_reward = 0
         step_count = 0
@@ -332,14 +413,14 @@ def train_gate_search_ppo_agent_medium(episodes=50, model_path="gate_search_ppo_
             step_count += 1
             
             if detection_results:
-                final_area = max(d['width'] * d['height'] for d in detection_results)
+                final_area = max(d['width'] * d['height'] for d in detection_results if 'width' in d and 'height' in d)
             
             if done:
                 move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
                 turn_action_names = ["turn_left", "turn_right"]
                 
                 logger.info(f"Episode: {episode}, Score: {step_count}, Total Reward: {total_reward:.2f}, Final Area: {final_area:.2f}")
-                print(f"Ep: {episode+1}/{episodes}, S: {step_count}, R: {total_reward:.2f}, A: {final_area:.2f}, MAct: {move_action_names[move_action]}, TAct: {turn_action_names[turn_action]}")
+                print(f"Ep: {episode+1}/{total_training_episodes}, S: {step_count}, R: {total_reward:.2f}, A: {final_area:.2f}, MAct: {move_action_names[move_action]}, TAct: {turn_action_names[turn_action]}")
                 scores.append(step_count)
                 total_rewards.append(total_reward)
                 final_areas.append(final_area)
@@ -372,7 +453,7 @@ def train_gate_search_ppo_agent_medium(episodes=50, model_path="gate_search_ppo_
         # 保存检查点
         if (episode + 1) % 10 == 0:
             checkpoint_path = model_path.replace('.pth', f'_checkpoint_ep_{episode+1}.pth')
-            torch.save(ppo_agent.policy.state_dict(), checkpoint_path)
+            ppo_agent.save_checkpoint(checkpoint_path, episode, ppo_agent.optimizer.state_dict())
             logger.info(f"检查点保存: {episode+1}")
 
         if episode % 5 == 0 and episode > 0:
@@ -393,6 +474,151 @@ def train_gate_search_ppo_agent_medium(episodes=50, model_path="gate_search_ppo_
     logger.info(f"PPO模型已保存为 {model_path}")
     
     return ppo_agent
+
+
+def continue_training_ppo_agent(model_path, additional_episodes=20, target_description="gate"):
+    """
+    基于现有模型继续训练
+    """
+    logger = logging.getLogger(__name__)
+    logger.info(f"基于现有模型继续训练: {model_path}, 额外训练 {additional_episodes} 轮")
+    
+    # 检查模型文件是否存在
+    if not os.path.exists(model_path):
+        logger.error(f"模型文件不存在: {model_path}")
+        return {"status": "error", "message": f"模型文件 {model_path} 不存在"}
+    
+    # 导入并初始化环境
+    from sifu_control.gate_find_ppo import TargetSearchEnvironment
+    env = TargetSearchEnvironment(target_description)
+    
+    move_action_dim = 4  # 4种移动动作: forward, backward, strafe_left, strafe_right
+    turn_action_dim = 2  # 2种转向动作: turn_left, turn_right
+    
+    # 创建PPO智能体
+    ppo_agent = PPOAgent(
+        (3, 480, 640), 
+        move_action_dim,
+        turn_action_dim,
+        lr=0.0005,       # 适度学习率
+        gamma=0.98,      # 较高的折扣因子
+        K_epochs=4,      # 适度更新轮数
+        eps_clip=0.2     # 适度PPO裁剪
+    )
+    
+    # 首先尝试从检查点加载，如果找不到检查点，则从主模型加载
+    latest_checkpoint = find_latest_checkpoint(model_path)
+    
+    if latest_checkpoint:
+        start_episode = ppo_agent.load_checkpoint(latest_checkpoint)
+    else:
+        # 尝试从主模型文件加载
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        try:
+            ppo_agent.policy.load_state_dict(torch.load(model_path, map_location=device))
+            ppo_agent.policy_old.load_state_dict(torch.load(model_path, map_location=device))
+            logger.info(f"从主模型文件加载: {model_path}")
+            start_episode = 0
+        except Exception as e:
+            logger.error(f"加载模型失败: {e}")
+            return {"status": "error", "message": f"加载模型失败: {e}"}
+    
+    memory = Memory()
+    
+    scores = deque(maxlen=50)
+    total_rewards = deque(maxlen=50)
+    final_areas = deque(maxlen=50)
+    
+    batch_memory = Memory()
+    
+    total_training_episodes = start_episode + additional_episodes
+    
+    logger.info(f"从第 {start_episode} 轮开始，继续训练 {additional_episodes} 轮，总共到第 {total_training_episodes} 轮")
+    
+    for episode in range(start_episode, total_training_episodes):
+        state = env.reset()
+        total_reward = 0
+        step_count = 0
+        
+        done = False
+        final_area = 0
+        
+        while not done:
+            move_action, turn_action, move_forward_step, turn_angle = ppo_agent.act(state, memory)
+            
+            # 环境交互
+            next_state, reward, done, detection_results = env.step(move_action, turn_action, move_forward_step, turn_angle)
+            
+            memory.rewards.append(reward)
+            memory.is_terminals.append(done)
+            
+            state = next_state
+            total_reward += reward
+            step_count += 1
+            
+            if detection_results:
+                final_area = max(d['width'] * d['height'] for d in detection_results if 'width' in d and 'height' in d)
+            
+            if done:
+                move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
+                turn_action_names = ["turn_left", "turn_right"]
+                
+                logger.info(f"Episode: {episode}, Score: {step_count}, Total Reward: {total_reward:.2f}, Final Area: {final_area:.2f}")
+                print(f"Ep: {episode+1}/{total_training_episodes}, S: {step_count}, R: {total_reward:.2f}, A: {final_area:.2f}, MAct: {move_action_names[move_action]}, TAct: {turn_action_names[turn_action]}")
+                scores.append(step_count)
+                total_rewards.append(total_reward)
+                final_areas.append(final_area)
+                
+                env.reset_to_origin()
+                break
+
+        # 累积批量数据
+        batch_memory.states.extend(memory.states)
+        batch_memory.move_actions.extend(memory.move_actions)
+        batch_memory.turn_actions.extend(memory.turn_actions)
+        batch_memory.logprobs.extend(memory.logprobs)
+        batch_memory.rewards.extend(memory.rewards)
+        batch_memory.is_terminals.extend(memory.is_terminals)
+        if hasattr(memory, 'action_params'):
+            batch_memory.action_params.extend(memory.action_params)
+        
+        memory.clear_memory()
+        
+        # 每5个episode更新一次
+        if (episode + 1) % 5 == 0 and len(batch_memory.rewards) > 0:
+            print(f"更新策略 - Episodes {(episode-4)} to {episode+1}...")
+            update_start_time = time.time()
+            ppo_agent.update(batch_memory)
+            update_end_time = time.time()
+            print(f"策略更新耗时: {update_end_time - update_start_time:.2f}s")
+            
+            batch_memory.clear_memory()
+        
+        # 保存检查点
+        if (episode + 1) % 10 == 0:
+            checkpoint_path = model_path.replace('.pth', f'_checkpoint_ep_{episode+1}.pth')
+            ppo_agent.save_checkpoint(checkpoint_path, episode, ppo_agent.optimizer.state_dict())
+            logger.info(f"检查点保存: {episode+1}")
+
+        if episode % 5 == 0 and episode > 0:
+            avg_score = np.mean(scores) if scores else 0
+            avg_total_reward = np.mean(total_rewards) if total_rewards else 0
+            avg_final_area = np.mean(final_areas) if final_areas else 0
+            logger.info(f"Episode {episode}, Avg Score: {avg_score:.2f}, Avg Reward: {avg_total_reward:.2f}")
+    
+    # 最终更新
+    if len(batch_memory.rewards) > 0:
+        print("更新最终策略...")
+        ppo_agent.update(batch_memory)
+        batch_memory.clear_memory()
+    
+    logger.info("继续训练完成！")
+    
+    torch.save(ppo_agent.policy.state_dict(), model_path)
+    logger.info(f"更新后的PPO模型已保存为 {model_path}")
+    
+    return {"status": "success", "message": f"继续训练完成，共训练了 {additional_episodes} 轮", "final_episode": total_training_episodes}
+
 
 def evaluate_trained_ppo_agent_medium(model_path="gate_search_ppo_model_medium.pth", episodes=5, target_description="gate"):
     """
