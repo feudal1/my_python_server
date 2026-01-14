@@ -51,7 +51,7 @@ def setup_logging():
 
 class TargetSearchEnvironment:
     """
-    目标搜索环境 - 适配更大网络的版本
+    目标搜索环境 - 适配改进网络的版本
     """
     def __init__(self, target_description="gate"):
         self.controller = ImprovedMovementController()
@@ -288,31 +288,13 @@ class TargetSearchEnvironment:
             if area > max_area:
                 max_area = area
         
+
         # 基础奖励：只要检测到门就给予正反馈
         base_detection_reward = 0.2  # 适度调整基础检测奖励
         reward += base_detection_reward
         self.logger.debug(f"检测到门，基础奖励: {base_detection_reward}")
-        
-        # 基于目标绝对大小的奖励：目标越大，奖励越高
-        size_based_reward = max_area / 12000  # 调整大小奖励比例
-        
-        reward += size_based_reward
-        self.logger.debug(f"基于目标大小的奖励: {size_based_reward}, 目标面积: {max_area}")
-        
-        # 基于接近目标的奖励
-        if min_distance < prev_distance:
-            approach_reward = 0.15  # 适度调整接近奖励
-            reward += approach_reward
-            self.logger.debug(f"接近目标奖励: {approach_reward}")
-        
-        # 基于远离中心的惩罚
-        if min_distance > prev_distance:
-            distance_penalty = -0.03
-            reward += distance_penalty
-            self.logger.debug(f"远离目标惩罚: {distance_penalty}")
-        
-        # 探索奖励
-        reward += exploration_bonus
+
+
         
         return reward, max_area
 
@@ -333,25 +315,25 @@ class TargetSearchEnvironment:
         
         # 执行移动动作
         if move_action == 0 and move_forward_step > 0:  # forward
-            self.controller.move_forward(duration=move_forward_step*2)
-            move_wait_time = move_forward_step * 0.4  # 0.4秒/单位移动距离
+            self.controller.move_forward(duration=move_forward_step*10)
+         
         elif move_action == 1 and move_forward_step > 0:  # backward
-            self.controller.move_backward(duration=move_forward_step*2)
-            move_wait_time = move_forward_step * 0.4  # 0.4秒/单位移动距离
+            self.controller.move_backward(duration=move_forward_step*10)
+           
         elif move_action == 2 and move_forward_step > 0:  # strafe_left
-            self.controller.strafe_left(duration=move_forward_step*2)
-            move_wait_time = move_forward_step * 0.4  # 0.4秒/单位移动距离
+            self.controller.strafe_left(duration=move_forward_step*10)
+           
         elif move_action == 3 and move_forward_step > 0:  # strafe_right
-            self.controller.strafe_right(duration=move_forward_step*2)
-            move_wait_time = move_forward_step * 0.4  # 0.4秒/单位移动距离
+            self.controller.strafe_right(duration=move_forward_step*10)
+           
         
         # 执行转头动作
         if turn_action == 0 and turn_angle > 0:  # turn_left
-            self.controller.turn_left(turn_angle*8, duration=turn_angle*0.70)
-            turn_wait_time = turn_angle * 0.015  # 0.015秒/度
+            self.controller.turn_left(turn_angle*400, duration=turn_angle)
+           
         elif turn_action == 1 and turn_angle > 0:  # turn_right
-            self.controller.turn_right(turn_angle*8, duration=turn_angle*0.70)
-            turn_wait_time = turn_angle * 0.015  # 0.015秒/度
+            self.controller.turn_right(turn_angle*400, duration=turn_angle)
+            
         
         # 取两个等待时间的最大值
         wait_time = max(move_wait_time, turn_wait_time, 0.2)  # 至少0.2秒
@@ -414,19 +396,22 @@ class TargetSearchEnvironment:
         done=climb_detected or self.step_count >= self.max_steps
         # 如果检测到climb，给予额外奖励
         if climb_detected:
-            # 计算快速完成的额外奖励：基于剩余步数给予额外奖励
-            remaining_steps = self.max_steps - self.step_count
-            speed_bonus = remaining_steps * 5  # 适度调整速度奖励
-            reward += 100 + speed_bonus  # 给予更高的climb奖励
-            self.logger.info(f"检测到climb类别！基础奖励: 100.0, 速度奖励: {speed_bonus}")
-        # 如果成功找到门，给予额外奖励
+            # 计算指数级速度完成奖励：基于剩余步数给予指数级额外奖励
+           
+            
+            # 使用指数函数确保早期完成获得更多奖励
+            # 例如：当剩余步数多时（早期完成），奖励增长更快
+            speed_bonus = 500 / (self.step_count) 
+            reward += speed_bonus  # 给予更高的climb奖励
+            self.logger.info(f"检测到climb类别！基础奖励: 100.0, 速度奖励: {speed_bonus:.2f}")
+                # 如果成功找到门，给予额外奖励
 
-        # 输出每步得分
+        # 输出每步得分 - 增加更多详细信息
         detected_targets = len(detection_results) if detection_results else 0
         print(f"Step {self.step_count}, Area: {current_area:.2f}, Reward: {reward:.2f}, "
-            f"Targets Detected: {detected_targets}, Distance to Center: {current_distance:.2f}, "
-            f"Done: {done}, Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}, "
-            f"Move Step: {move_forward_step}, Turn Angle: {turn_angle}, Wait Time: {wait_time:.2f}")
+           
+            f" Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}, "
+            f"Move Step: {move_forward_step:.3f}, Turn Angle: {turn_angle:.3f}")
         
         # 更新位置历史，记录当前状态的特征（如检测结果数量）
         state_feature = len(detection_results)  # 这里用检测到的对象数量作为状态特征
@@ -457,10 +442,79 @@ class TargetSearchEnvironment:
         return initial_state
 
 
+def print_model_parameters_info(model, model_name="Model"):
+    """
+    打印模型参数的详细信息
+    """
+    print(f"\n{model_name} 参数统计:")
+    total_params = 0
+    trainable_params = 0
+    
+    for name, param in model.named_parameters():
+        param_count = param.numel()
+        total_params += param_count
+        if param.requires_grad:
+            trainable_params += param_count
+        
+        # 打印参数的形状和名称
+        print(f"  {name}: shape={list(param.shape)}, params={param_count}, "
+              f"requires_grad={param.requires_grad}")
+    
+    print(f"\n总参数数量: {total_params:,}")
+    print(f"可训练参数数量: {trainable_params:,}")
+    print(f"不可训练参数数量: {total_params - trainable_params:,}")
+    
+    # 打印参数值的统计信息
+    print(f"\n{model_name} 参数值统计:")
+    all_param_values = []
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            values = param.data.cpu().numpy().flatten()
+            all_param_values.extend(values)
+            print(f"  {name}: mean={np.mean(values):.6f}, std={np.std(values):.6f}, "
+                  f"min={np.min(values):.6f}, max={np.max(values):.6f}")
+    
+    if all_param_values:
+        all_param_values = np.array(all_param_values)
+        print(f"  全局: mean={np.mean(all_param_values):.6f}, std={np.std(all_param_values):.6f}, "
+              f"min={np.min(all_param_values):.6f}, max={np.max(all_param_values):.6f}")
+
+
+def print_action_distribution(action_probs, action_type="action"):
+    """
+    打印动作概率分布
+    """
+    print(f"\n{action_type.capitalize()} 概率分布:")
+    for i, prob in enumerate(action_probs):
+        print(f"  {action_type}_{i}: {prob:.4f}")
+    print(f"  最大概率: {np.max(action_probs):.4f}")
+    print(f"  最小概率: {np.min(action_probs):.4f}")
+    print(f"  概率熵: {-(action_probs * np.log(action_probs + 1e-10)).sum():.4f}")
+
+
+def print_gradient_flow(model):
+    """
+    打印梯度流动信息
+    """
+    print(f"\n梯度流动统计:")
+    total_norm = 0
+    param_count = 0
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            param_norm = param.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+            param_count += 1
+            print(f"  {name}: grad_norm={param_norm:.6f}")
+        else:
+            print(f"  {name}: grad=None")
+    
+    total_norm = total_norm ** (1. / 2)
+    print(f"  总梯度范数: {total_norm:.6f}")
+
 
 def execute_ppo_tool(tool_name, *args):
     """
-    根据工具名称执行对应的PPO操作
+    根据工具名称执行对应的PPO操作 - 更新导入路径
     
     Args:
         tool_name (str): 工具名称
@@ -475,18 +529,33 @@ def execute_ppo_tool(tool_name, *args):
     if tool_name == "find_gate_with_ppo":
         from ppo_networks import find_gate_with_ppo_medium
         func = find_gate_with_ppo_medium
+    elif tool_name == "find_gate_with_gru_ppo":
+        from ppo_networks import find_gate_with_gru_ppo
+        func = find_gate_with_gru_ppo
     elif tool_name == "train_gate_search_ppo_agent":
         from ppo_networks import train_gate_search_ppo_agent_medium
         func = train_gate_search_ppo_agent_medium
+    elif tool_name == "train_gate_search_gru_ppo_agent":
+        from ppo_networks import train_gate_search_gru_ppo_agent
+        func = train_gate_search_gru_ppo_agent
     elif tool_name == "continue_train_ppo_agent":
         from ppo_networks import continue_training_ppo_agent
         func = continue_training_ppo_agent
+    elif tool_name == "continue_train_gru_ppo_agent":
+        from ppo_networks import continue_training_gru_ppo_agent
+        func = continue_training_gru_ppo_agent
     elif tool_name == "evaluate_trained_ppo_agent":
         from ppo_networks import evaluate_trained_ppo_agent_medium
         func = evaluate_trained_ppo_agent_medium
+    elif tool_name == "evaluate_trained_gru_ppo_agent":
+        from ppo_networks import evaluate_trained_gru_ppo_agent
+        func = evaluate_trained_gru_ppo_agent
     elif tool_name == "load_and_test_ppo_agent":
         from ppo_networks import load_and_test_ppo_agent_medium
         func = load_and_test_ppo_agent_medium
+    elif tool_name == "load_and_test_gru_ppo_agent":
+        from ppo_networks import load_and_test_gru_ppo_agent
+        func = load_and_test_gru_ppo_agent
     else:
         logger.error(f"错误: 未知的PPO工具 '{tool_name}'")
         print(f"错误: 未知的PPO工具 '{tool_name}'")
@@ -494,28 +563,48 @@ def execute_ppo_tool(tool_name, *args):
 
     try:
         # 特殊处理带参数的函数
-        if tool_name == "train_gate_search_ppo_agent":
+        if tool_name in ["train_gate_search_ppo_agent", "train_gate_search_gru_ppo_agent"]:
             episodes = int(args[0]) if args else 30  # 默认训练episode
             model_path = args[1] if len(args) > 1 else "gate_search_ppo_model_medium.pth"
             target_desc = args[2] if len(args) > 2 else "gate"
-            result = func(episodes, model_path, target_desc)
-        elif tool_name == "continue_train_ppo_agent":
+            sequence_length = int(args[3]) if len(args) > 3 else 4  # GRU序列长度
+            if "gru" in tool_name:
+                result = func(episodes, model_path, target_desc, sequence_length)
+            else:
+                result = func(episodes, model_path, target_desc)
+        elif tool_name in ["continue_train_ppo_agent", "continue_train_gru_ppo_agent"]:
             model_path = args[0] if args else "gate_search_ppo_model_medium.pth"
             additional_episodes = int(args[1]) if len(args) > 1 else 20
             target_desc = args[2] if len(args) > 2 else "gate"
-            result = func(model_path, additional_episodes, target_desc)
-        elif tool_name == "evaluate_trained_ppo_agent":
+            sequence_length = int(args[3]) if len(args) > 3 else 4  # GRU序列长度
+            if "gru" in tool_name:
+                result = func(model_path, additional_episodes, target_desc, sequence_length)
+            else:
+                result = func(model_path, additional_episodes, target_desc)
+        elif tool_name in ["evaluate_trained_ppo_agent", "evaluate_trained_gru_ppo_agent"]:
             model_path = args[0] if args else "gate_search_ppo_model_medium.pth"
             episodes = int(args[1]) if len(args) > 1 else 5
             target_desc = args[2] if len(args) > 2 else "gate"
-            result = func(model_path, episodes, target_desc)
-        elif tool_name == "load_and_test_ppo_agent":
+            sequence_length = int(args[3]) if len(args) > 3 else 4  # GRU序列长度
+            if "gru" in tool_name:
+                result = func(model_path, episodes, target_desc, sequence_length)
+            else:
+                result = func(model_path, episodes, target_desc)
+        elif tool_name in ["load_and_test_ppo_agent", "load_and_test_gru_ppo_agent"]:
             model_path = args[0] if args else "gate_search_ppo_model_medium.pth"
             target_desc = args[1] if len(args) > 1 else "gate"
-            result = func(model_path, target_desc)
+            sequence_length = int(args[2]) if len(args) > 2 else 4  # GRU序列长度
+            if "gru" in tool_name:
+                result = func(model_path, target_desc, sequence_length)
+            else:
+                result = func(model_path, target_desc)
         elif tool_name == "find_gate_with_ppo":
             target_desc = args[0] if args else "gate"
             result = func(target_desc)
+        elif tool_name == "find_gate_with_gru_ppo":
+            target_desc = args[0] if args else "gate"
+            sequence_length = int(args[1]) if len(args) > 1 else 4  # GRU序列长度
+            result = func(target_desc, sequence_length)
         else:
             result = func()
         logger.info(f"PPO工具执行成功: {tool_name}")
@@ -525,7 +614,6 @@ def execute_ppo_tool(tool_name, *args):
         import traceback
         traceback.print_exc()  # 添加详细的错误追踪
         return {"status": "error", "message": f"执行PPO工具时出错: {str(e)}"}
-
 def main():
     """
     主函数，用于直接运行此脚本
@@ -537,9 +625,13 @@ def main():
         print("导入成功！")
         print("\n可用的功能:")
         print("1. 训练门搜索智能体: train_gate_search_ppo_agent")
-        print("2. 寻找门（包含训练）: find_gate_with_ppo")
-        print("3. 评估已训练模型: evaluate_trained_ppo_agent")
-        print("4. 加载并测试模型: load_and_test_ppo_agent")
+        print("2. 训练GRU门搜索智能体: train_gate_search_gru_ppo_agent")
+        print("3. 寻找门（包含训练）: find_gate_with_ppo")
+        print("4. 使用GRU寻找门（包含训练）: find_gate_with_gru_ppo")
+        print("5. 评估已训练模型: evaluate_trained_ppo_agent")
+        print("6. 评估已训练GRU模型: evaluate_trained_gru_ppo_agent")
+        print("7. 加载并测试模型: load_and_test_ppo_agent")
+        print("8. 加载并测试GRU模型: load_and_test_gru_ppo_agent")
         
         # 运行快速训练
         print("\n=== 开始中等规模训练门搜索智能体 ===")
@@ -564,7 +656,6 @@ def main():
     # 执行对应的工具
     response = execute_ppo_tool(tool_name, *args)
     print(response)
-
 
 if __name__ == "__main__":
     main()
