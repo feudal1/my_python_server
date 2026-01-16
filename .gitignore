@@ -22,7 +22,7 @@ exe_output/*
 *runs*
 *yolo_dataset*
 *screenshot*png
-
+*sifu_window_capture.png
 *.spec
 *build*
 *dist*
