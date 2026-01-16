@@ -526,9 +526,43 @@ def build_sifu_mod():
     
     return {"status": "success", "result": "MOD build completed and game launched"}
 
-
-
-
+def import_fbx():
+    """
+    执行完整的FBX导入工作流并返回每个步骤的结果
+    """
+    results = []
+    
+    # 步骤1: 发送Python代码请求
+    step_result = send_python_code_request()
+    results.append({"step": "send_python_code_request", "result": step_result})
+    
+    # 步骤2: 发送FBX导入请求
+    step_result = send_fbx_import_request()
+    results.append({"step": "send_fbx_import_request", "result": step_result})
+    
+    # 步骤3: 删除材质
+    step_result = delete_materials_in_folder()
+    results.append({"step": "delete_materials_in_folder", "result": step_result})
+    
+    # 步骤4: 移动纹理
+    step_result = move_textures_to_folder()
+    results.append({"step": "move_textures_to_folder", "result": step_result})
+    
+    # 步骤5: 移动并重命名骨骼
+    step_result = move_and_rename_skeleton()
+    results.append({"step": "move_and_rename_skeleton", "result": step_result})
+    
+    # 步骤6: 创建材质实例
+    step_result = create_material_instances_from_textures()
+    results.append({"step": "create_material_instances_from_textures", "result": step_result})
+    
+    # 返回所有结果
+    return {
+        "status": "success",
+        "workflow": "import_fbx",
+        "steps_completed": len(results),
+        "results": results
+    }
 
 def execute_tool(tool_name, *args):
     """
@@ -543,12 +577,7 @@ def execute_tool(tool_name, *args):
     """
     tool_functions = {
         "activate_ue": activate_ue_window,
-        "send_python_code_request": send_python_code_request,
-        "send_fbx_import_request": send_fbx_import_request,
-        "delete_materials_in_folder": delete_materials_in_folder,
-        "move_textures_to_folder": move_textures_to_folder,
-        "move_and_rename_skeleton": move_and_rename_skeleton,
-        "create_material_instances_from_textures": create_material_instances_from_textures,
+        "import_fbx": import_fbx,
         "build_sifu_mod": build_sifu_mod,
     }
     

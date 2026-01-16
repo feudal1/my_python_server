@@ -9,54 +9,15 @@
         "[TOOL:activate_ue]"
       ]
     },
-    {
-      "name": "send_fbx_import_request",
-      "path": "ue_cline/ue_api_tool.py",
-      "description": "发送FBX导入请求到UE服务器，导入固定路径的FBX文件",
-      "parameters": {},
-      "examples": [
-        "[TOOL:send_fbx_import_request]"
-      ]
-    },
-    {
-      "name": "delete_materials_in_folder",
-      "path": "ue_cline/ue_api_tool.py",
-      "description": "删除指定文件夹内的所有材质，保留纹理、骨骼、网格体等其他资源",
-      "parameters": {
-
-      },
-      "examples": [
-        "[TOOL:delete_materials_in_folder]"
-
-      ]
-    },
-    {
-  "name": "move_and_rename_skeleton",
+  {
+  "name": "import_fbx",
   "path": "ue_cline/ue_api_tool.py",
-  "description": "将meshes文件夹中的Skeleton资产移动到指定目标文件夹并重命名",
+  "description": "导入fbx文件",
   "parameters": {},
   "examples": [
-    "[TOOL:move_and_rename_skeleton]"
+    "[TOOL:import_fbx]"
   ]
 },
-{
-  "name": "create_material_instances_from_textures",
-  "path": "ue_cline/ue_api_tool.py",
-  "description": "从纹理文件夹中的纹理创建材质实例，绑定到指定的主材质，会先清空目标材质文件夹",
-  "parameters": {},
-  "examples": [
-    "[TOOL:create_material_instances_from_textures]"
-  ]
-},
-    {
-      "name": "move_textures_to_folder",
-      "path": "ue_cline/ue_api_tool.py",
-      "description": "清空textures文件夹，然后将meshes文件夹中的纹理资产移动到textures文件夹中",
-      "parameters": {},
-      "examples": [
-        "[TOOL:move_textures_to_folder]"
-      ]
-    },
     {
       "name": "build_sifu_mod",
       "path": "ue_cline/ue_api_tool.py",
