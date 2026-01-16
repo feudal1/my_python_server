@@ -161,6 +161,7 @@ def continue_training_gru_ppo_agent(model_path=None):
                 state = env.reset()
                 break
 
+        # 每个episode结束后都将其记忆加入批量记忆
         batch_memory.states.extend(memory.states)
         batch_memory.move_actions.extend(memory.move_actions)
         batch_memory.turn_actions.extend(memory.turn_actions)
@@ -172,8 +173,9 @@ def continue_training_gru_ppo_agent(model_path=None):
         
         memory.clear_memory()
         
-        if (episode + 1) % config['UPDATE_INTERVAL'] == 0 and len(batch_memory.rewards) > 0:
-            print(f"更新策略 - Episodes {(episode-config['UPDATE_INTERVAL']+1)} to {episode+1}...")
+        # 每个episode结束后都尝试更新策略
+        if len(batch_memory.rewards) > 0:
+            print(f"更新策略 - Episode {episode+1}...")
             update_start_time = time.time()
             ppo_agent.update(batch_memory)
             update_end_time = time.time()
@@ -203,7 +205,6 @@ def continue_training_gru_ppo_agent(model_path=None):
     logger.info(f"更新后的GRU PPO模型已保存为 {model_path}")
     
     return {"status": "success", "message": f"继续训练完成，共训练了 {config['EPISODES']} 轮", "final_episode": total_training_episodes}
-
 
 
 

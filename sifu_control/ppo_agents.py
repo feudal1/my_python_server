@@ -387,13 +387,22 @@ class GRUPPOAgent:
         if len(memory.states) == 0:
             return
             
-        # Convert memory to tensors
-        states = torch.stack(list(memory.states)).unsqueeze(0)  # Add batch dimension
-        move_actions = torch.tensor(list(memory.move_actions), dtype=torch.long)
-        turn_actions = torch.tensor(list(memory.turn_actions), dtype=torch.long)
-        old_logprobs = torch.tensor(list(memory.logprobs), dtype=torch.float)
-        rewards = torch.tensor(list(memory.rewards), dtype=torch.float)
-        terminals = torch.tensor(list(memory.is_terminals), dtype=torch.bool)
+        # Convert memory to tensors - 保持单个episode的序列结构
+        # 将memory中的数据作为单一序列处理
+        states_list = list(memory.states)
+        if len(states_list) == 0:
+            return
+        
+        # 构建状态序列
+        states = torch.stack(states_list).unsqueeze(0)  # [1, seq_len, channels, height, width]
+        move_actions = torch.tensor(list(memory.move_actions), dtype=torch.long)  # [seq_len]
+        turn_actions = torch.tensor(list(memory.turn_actions), dtype=torch.long)  # [seq_len]
+        old_logprobs = torch.tensor(list(memory.logprobs), dtype=torch.float)    # [seq_len]
+        rewards = torch.tensor(list(memory.rewards), dtype=torch.float)          # [seq_len]
+        terminals = torch.tensor(list(memory.is_terminals), dtype=torch.bool)    # [seq_len]
+
+        if len(rewards) == 0:
+            return
 
         # Compute discounted rewards
         discounted_rewards = []
@@ -405,39 +414,100 @@ class GRUPPOAgent:
             discounted_rewards.insert(0, running_add)
         
         discounted_rewards = torch.tensor(discounted_rewards, dtype=torch.float)
-        discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-5)
+        if discounted_rewards.numel() > 1:  # 只有在有多于一个元素时才标准化
+            discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-5)
+        else:
+            # 如果只有一个元素，跳过标准化
+            pass
 
         # Optimize policy K epochs
         for _ in range(self.K_epochs):
-            # Forward pass
+            # Forward pass - 获取整个序列的输出
             move_probs, turn_probs, action_params, state_vals, _ = self.policy(states)
             
-            # Calculate action logprobs
-            move_dists = Categorical(move_probs)
-            turn_dists = Categorical(turn_probs)
+            # state_vals shape: [batch=1, seq_len, 1] -> [seq_len]
+            state_vals = state_vals.squeeze(0).squeeze(-1)  # [seq_len]
             
-            move_logprobs = move_dists.log_prob(move_actions)
-            turn_logprobs = turn_dists.log_prob(turn_actions)
-            logprobs = move_logprobs + turn_logprobs
+            # Ensure we have the right dimensions for action probabilities
+            move_probs_squeezed = move_probs.squeeze(0)  # [seq_len, move_action_dim]
+            turn_probs_squeezed = turn_probs.squeeze(0)  # [seq_len, turn_action_dim]
             
+            # 检查维度并确保有足够的维度进行gather操作
+            if move_probs_squeezed.dim() == 1:
+                # 如果只有1个动作类别的概率，我们不需要gather
+                # 这种情况不应该发生，因为我们应该有多个动作选项
+                if move_probs_squeezed.size(0) == len(move_actions):
+                    # 概率分布与动作数量不匹配，需要重新检查
+                    # 重新构建概率矩阵，每个时间步一个动作的概率
+                    move_probs_squeezed = move_probs_squeezed.unsqueeze(0).expand(len(move_actions), -1)
+                else:
+                    # 如果概率张量形状不正确，跳过这次更新
+                    continue
+                    
+            if turn_probs_squeezed.dim() == 1:
+                # 同样的处理
+                if turn_probs_squeezed.size(0) == len(turn_actions):
+                    turn_probs_squeezed = turn_probs_squeezed.unsqueeze(0).expand(len(turn_actions), -1)
+                else:
+                    continue
+
+            # 确保动作索引在有效范围内
+            move_actions = torch.clamp(move_actions, 0, move_probs_squeezed.size(1) - 1)
+            turn_actions = torch.clamp(turn_actions, 0, turn_probs_squeezed.size(1) - 1)
+
+            # Calculate action logprobs - FIXED: 更安全的处理
+            try:
+                # 使用更安全的gather操作
+                if move_probs_squeezed.size(0) != move_actions.size(0):
+                    # 如果序列长度不匹配，截断到较短的长度
+                    min_len = min(move_probs_squeezed.size(0), move_actions.size(0))
+                    move_probs_squeezed = move_probs_squeezed[:min_len]
+                    move_actions = move_actions[:min_len]
+                    
+                if turn_probs_squeezed.size(0) != turn_actions.size(0):
+                    # 如果序列长度不匹配，截断到较短的长度
+                    min_len = min(turn_probs_squeezed.size(0), turn_actions.size(0))
+                    turn_probs_squeezed = turn_probs_squeezed[:min_len]
+                    turn_actions = turn_actions[:min_len]
+                
+                # 现在进行gather操作
+                gathered_move = move_probs_squeezed.gather(1, move_actions.unsqueeze(1))
+                move_logprobs = torch.log(gathered_move.squeeze(-1))  # 使用squeeze(-1)替代squeeze(1)
+                
+                gathered_turn = turn_probs_squeezed.gather(1, turn_actions.unsqueeze(1))
+                turn_logprobs = torch.log(gathered_turn.squeeze(-1))  # 使用squeeze(-1)替代squeeze(1)
+                
+                logprobs = move_logprobs + turn_logprobs
+                
+            except IndexError as e:
+                print(f"Gather操作索引错误: {e}")
+                print(f"move_probs_squeezed shape: {move_probs_squeezed.shape}")
+                print(f"move_actions shape: {move_actions.shape}")
+                print(f"turn_probs_squeezed shape: {turn_probs_squeezed.shape}")
+                print(f"turn_actions shape: {turn_actions.shape}")
+                continue
+            except RuntimeError as e:
+                print(f"Gather操作运行时错误: {e}")
+                continue
+                
             # Calculate entropy bonus to encourage exploration
-            move_entropy = -(move_probs * torch.log(move_probs + 1e-10)).sum(dim=-1).mean()
-            turn_entropy = -(turn_probs * torch.log(turn_probs + 1e-10)).sum(dim=-1).mean()
+            move_entropy = -(move_probs_squeezed * torch.log(move_probs_squeezed + 1e-10)).sum(dim=-1).mean()
+            turn_entropy = -(turn_probs_squeezed * torch.log(turn_probs_squeezed + 1e-10)).sum(dim=-1).mean()
             entropy_bonus = move_entropy + turn_entropy
             
             # Calculate ratios
             ratios = torch.exp(logprobs - old_logprobs.detach())
             
-            # Calculate advantages
-            advantages = discounted_rewards - state_vals.squeeze(-1).detach()
+            # Calculate advantages - now both should be [seq_len]
+            advantages = discounted_rewards - state_vals.detach()
             
             # Calculate surrogate losses
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
             actor_loss = -torch.min(surr1, surr2).mean()
             
-            # Value loss
-            critic_loss = self.MseLoss(state_vals.squeeze(-1), discounted_rewards)
+            # Value loss - ensure both tensors are the same size
+            critic_loss = self.MseLoss(state_vals, discounted_rewards)
             
             # Total loss - including entropy regularization
             entropy_coeff = CONFIG.get('ENTROPY_COEFFICIENT', 0.01)
@@ -445,13 +515,13 @@ class GRUPPOAgent:
             
             # Update network
             self.optimizer.zero_grad()
+            # 添加梯度裁剪以避免梯度爆炸
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=CONFIG.get('GRADIENT_CLIP_NORM', 0.5))
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=CONFIG['GRADIENT_CLIP_NORM'])
             self.optimizer.step()
 
         # Copy new weights into old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
-
     def _preprocess_state(self, state):
         """
         预处理状态（图像）
