@@ -861,6 +861,62 @@ class EnhancedTargetSearchEnvironment:
             self.logger.error(f"YOLO检测过程中出错: {e}")
             return []
 
+    def _save_detection_image_with_bounding_boxes(self, image, detections, prefix="detection"):
+        """
+        保存带检测框的图片
+        """
+        try:
+            # 复制图像以避免修改原始图像
+            img_with_boxes = image.copy()
+            
+            # 绘制检测框
+            for detection in detections:
+                bbox = detection['bbox']
+                label = detection['label']
+                score = detection['score']
+                
+                # 转换边界框坐标为整数
+                x1, y1, x2, y2 = map(int, bbox)
+                
+                # 绘制矩形框
+                color = (0, 255, 0)  # 绿色框
+                thickness = 2
+                cv2.rectangle(img_with_boxes, (x1, y1), (x2, y2), color, thickness)
+                
+                # 添加标签文本
+                label_text = f"{label}: {score:.2f}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                text_color = (255, 255, 255)  # 白色文字
+                text_thickness = 1
+                
+                # 计算文本框大小
+                (text_width, text_height), baseline = cv2.getTextSize(label_text, font, font_scale, text_thickness)
+                
+                # 绘制文本背景
+                cv2.rectangle(img_with_boxes, (x1, y1 - text_height - 10), (x1 + text_width, y1), color, -1)
+                
+                # 添加文本
+                cv2.putText(img_with_boxes, label_text, (x1, y1 - 5), font, font_scale, text_color, text_thickness)
+            
+            # 生成文件名
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"{prefix}_step_{self.step_count}_{timestamp}.png"
+            
+            # 确定保存目录
+            save_dir = os.path.join(Path(__file__).parent, "detection_images")
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+            
+            # 保存图片
+            save_path = os.path.join(save_dir, filename)
+            cv2.imwrite(save_path, img_with_boxes)
+            
+            self.logger.info(f"检测图像已保存: {save_path}")
+            
+        except Exception as e:
+            self.logger.error(f"保存检测图像时出错: {e}")
+
     def step(self, move_action, turn_action, move_forward_step=2, turn_angle=30):
         """
         执行动作并返回新的状态、奖励和是否结束
@@ -882,6 +938,9 @@ class EnhancedTargetSearchEnvironment:
         
         if pre_climb_detected:
             self.logger.info(f"动作执行前已检测到climb类别，立即终止")
+            
+            # 保存带识别框的图片
+            self._save_detection_image_with_bounding_boxes(pre_action_state, pre_action_detections, prefix="pre_action_climb_detected")
             
             # 完成奖励
             base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
@@ -926,6 +985,16 @@ class EnhancedTargetSearchEnvironment:
         # 检测目标
         detection_results = self.detect_target(new_state)
         
+        # 检查执行动作后是否检测到climb类别
+        post_climb_detected = any(
+            detection['label'].lower() == 'climb' or 'climb' in detection['label'].lower()
+            for detection in detection_results
+        )
+        
+        if post_climb_detected:
+            # 保存带识别框的图片
+            self._save_detection_image_with_bounding_boxes(new_state, detection_results, prefix="post_action_climb_detected")
+        
         # 计算奖励 - 使用全新的奖励函数
         reward, new_area = self.calculate_reward(
             detection_results, 
@@ -951,6 +1020,9 @@ class EnhancedTargetSearchEnvironment:
         
         # 如果检测到climb，给予额外奖励
         if climb_detected:
+            # 保存带识别框的图片
+            self._save_detection_image_with_bounding_boxes(new_state, detection_results, prefix="final_climb_detected")
+            
             # 基础完成奖励
             base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
             
@@ -983,7 +1055,6 @@ class EnhancedTargetSearchEnvironment:
             self.reset_to_origin()
         
         return new_state, reward, done, detection_results
-  
     def calculate_reward(self, detection_results, last_center_distance, action_taken, last_area):
         """
         计算综合奖励 - 需要补充完整实现
