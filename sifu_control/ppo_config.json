@@ -1,7 +1,7 @@
 {
   "config": {
-    "ENV_MAX_STEPS": 60,
-    "EVAL_MAX_STEPS": 60,
+    "ENV_MAX_STEPS": 120,
+    "EVAL_MAX_STEPS": 120,
     "MIN_GATE_AREA": 50000,
     "CENTER_THRESHOLD": 180,
     "DETECTION_CONFIDENCE": 0.8,

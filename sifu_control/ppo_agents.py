@@ -11,12 +11,13 @@ from torch.distributions import Categorical
 import cv2
 from PIL import Image
 import base64
-from collections import deque
+from collections import deque, defaultdict
 import logging
 from pathlib import Path
 from ultralytics import YOLO
 import pyautogui
 import json
+import hashlib
 
 
 def load_config():
@@ -153,8 +154,9 @@ class GRUPolicyNetwork(nn.Module):
         feature_size = 128  # 根据ResNetFeatureExtractor的输出调整
         
         # GRU层
-        self.gru = nn.GRU( feature_size, hidden_size, num_layers=2, batch_first=True, dropout=0.1) 
-                # Actor heads
+        self.gru = nn.GRU(feature_size, hidden_size, num_layers=2, batch_first=True, dropout=0.1) 
+        
+        # Actor heads
         self.move_actor = nn.Sequential(
             nn.Linear(hidden_size, 128),  # 增加隐藏层大小
             nn.ReLU(),
@@ -498,6 +500,40 @@ class GRUPPOAgent:
             print(f"检查点文件不存在: {filepath}")
             return 0
 
+
+class StuckDetector:
+    """
+    卡死检测器 - 检测AI是否陷入无法前进的状态
+    """
+    def __init__(self, window_size=5):
+        self.window_size = window_size
+        self.movement_history = deque(maxlen=window_size)
+        self.stuck_threshold = 3  # 连续多少次认为卡死
+
+    def record_movement(self):
+        """记录有效移动"""
+        self.movement_history.append(1)  # 1表示有效移动
+
+    def record_stuck(self):
+        """记录卡死状态"""
+        self.movement_history.append(0)  # 0表示卡死
+
+    def is_stuck(self):
+        """判断是否卡死"""
+        if len(self.movement_history) < self.window_size:
+            return False
+        
+        # 如果最近window_size次中大部分都是卡死状态
+        stuck_count = sum(1 for x in self.movement_history if x == 0)
+        return stuck_count >= self.stuck_threshold
+
+    def get_stuck_ratio(self):
+        """获取卡死比例"""
+        if not self.movement_history:
+            return 0.0
+        return sum(1 for x in self.movement_history if x == 0) / len(self.movement_history)
+
+
 class TargetSearchEnvironment:
     """
     目标搜索环境 - 使用全局配置
@@ -526,6 +562,232 @@ class TargetSearchEnvironment:
         # 成功条件阈值
         self.MIN_GATE_AREA = CONFIG['MIN_GATE_AREA']
         self.CENTER_THRESHOLD = CONFIG['CENTER_THRESHOLD']
+        
+        # 新增：物理状态追踪
+        self.previous_frame = None
+        self.action_history = deque(maxlen=10)  # 记录最近10个动作
+        self.visual_change_history = deque(maxlen=10)  # 记录最近10帧的视觉变化
+        self.action_effectiveness = defaultdict(lambda: deque(maxlen=5))  # 动作有效性统计
+        self.stuck_detector = StuckDetector(window_size=5)  # 卡死检测器
+        self.frame_change_threshold = 0.05  # 视觉变化阈值
+        self.no_progress_steps = 0  # 连续无进展步数
+        self.total_no_progress_steps = 0  # 总无进展步数
+
+    def calculate_reward(self, detection_results, prev_distance, action_taken=None, prev_area=None):
+        """
+        完全新版的奖励函数 - 专注于物理移动的有效性
+        """
+        reward = 0.0
+        
+        # 1. 视觉变化分析奖励
+        visual_change_reward = self._calculate_visual_change_reward(action_taken)
+        reward += visual_change_reward
+        
+        # 2. 动作一致性奖励
+        consistency_reward = self._calculate_action_consistency_reward(action_taken)
+        reward += consistency_reward
+        
+        # 3. 卡死惩罚
+        stuck_penalty = self._calculate_stuck_penalty()
+        reward += stuck_penalty
+        
+        # 4. 探索奖励
+        exploration_reward = self._calculate_exploration_reward()
+        reward += exploration_reward
+        
+        # 5. 重复动作惩罚
+        repetition_penalty = self._calculate_repetition_penalty(action_taken)
+        reward += repetition_penalty
+        
+        # 6. 长期进展奖励
+        progress_reward = self._calculate_progress_reward(detection_results)
+        reward += progress_reward
+        
+        # 7. 目标检测奖励（最小化，主要作为辅助）
+        target_reward = self._calculate_target_presence_reward(detection_results)
+        reward += target_reward
+        
+        # 更新内部状态
+        current_frame = self.capture_screen()
+        if current_frame is not None:
+            self.previous_frame = current_frame.copy()
+        
+        if action_taken:
+            self.action_history.append(action_taken)
+        
+        return reward, self._get_max_detection_area(detection_results)
+
+    def _calculate_visual_change_reward(self, action_taken):
+        """
+        基于视觉变化的奖励 - 检查动作是否产生了预期的视觉反馈
+        """
+        if self.previous_frame is None:
+            return 0.0
+            
+        current_frame = self.capture_screen()
+        if current_frame is None:
+            return 0.0
+            
+        # 计算帧间差异
+        frame_diff = self._calculate_frame_difference(self.previous_frame, current_frame)
+        self.visual_change_history.append(frame_diff)
+        
+        if not action_taken:
+            return 0.0
+            
+        move_action, turn_action = action_taken
+        move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
+        turn_action_names = ["turn_left", "turn_right"]
+        
+        # 预期的视觉变化量
+        expected_change = self._get_expected_change_for_action(move_action, turn_action)
+        
+        # 如果视觉变化小于预期且大于阈值，给予奖励；否则给予惩罚
+        if frame_diff > expected_change * 0.3:  # 有足够变化
+            # 根据变化量给予适度奖励
+            change_reward = min(frame_diff * 0.5, 0.1)
+            self.stuck_detector.record_movement()
+            return change_reward
+        else:
+            # 视觉变化不足，可能卡死了
+            self.stuck_detector.record_stuck()
+            return -0.05  # 小惩罚
+
+    def _get_expected_change_for_action(self, move_action, turn_action):
+        """
+        根据执行的动作返回预期的视觉变化量
+        """
+        expected = 0.0
+        
+        # 移动动作通常产生较大的透视变化
+        if move_action in [0, 1]:  # forward/backward
+            expected += 0.2
+        elif move_action in [2, 3]:  # strafe left/right
+            expected += 0.15
+            
+        # 转头动作产生视角变化
+        if turn_action in [0, 1]:  # turn left/right
+            expected += 0.1
+            
+        return expected
+
+    def _calculate_action_consistency_reward(self, action_taken):
+        """
+        奖励动作与视觉变化的一致性
+        """
+        if not action_taken or len(self.visual_change_history) < 2:
+            return 0.0
+            
+        move_action, turn_action = action_taken
+        recent_changes = list(self.visual_change_history)[-3:]  # 最近3次变化
+        
+        avg_change = np.mean(recent_changes) if recent_changes else 0.0
+        
+        # 如果执行了移动动作但视觉变化很小，说明可能无效
+        if move_action in [0, 1, 2, 3] and avg_change < 0.05:
+            return -0.03  # 移动无效惩罚
+        elif turn_action in [0, 1] and avg_change < 0.02:
+            return -0.02  # 转头无效惩罚
+        elif avg_change > 0.1:  # 显著变化奖励
+            return 0.02
+            
+        return 0.0
+
+    def _calculate_stuck_penalty(self):
+        """
+        计算卡死惩罚
+        """
+        if self.stuck_detector.is_stuck():
+            self.total_no_progress_steps += 1
+            return CONFIG.get('STUCK_PENALTY', -0.1) * min(self.total_no_progress_steps / 10, 1.0)
+        return 0.0
+
+    def _calculate_exploration_reward(self):
+        """
+        基于探索行为的奖励
+        """
+        if len(self.visual_change_history) < 5:
+            return 0.0
+            
+        # 计算视觉变化的标准差，高变化表示探索行为
+        changes = list(self.visual_change_history)
+        variation = np.std(changes)
+        
+        if variation > 0.05:  # 高变化性奖励
+            return 0.02
+        elif variation < 0.01:  # 低变化性惩罚
+            return -0.01
+            
+        return 0.0
+
+    def _calculate_repetition_penalty(self, action_taken):
+        """
+        重复动作惩罚
+        """
+        if not action_taken or len(self.action_history) < 3:
+            return 0.0
+            
+        recent_actions = list(self.action_history)[-3:]
+        same_action_count = sum(1 for act in recent_actions if act == action_taken)
+        
+        if same_action_count >= 3:  # 连续3次相同动作
+            return -0.05
+        elif same_action_count >= 2:  # 连续2次相同动作
+            return -0.02
+            
+        return 0.0
+
+    def _calculate_progress_reward(self, detection_results):
+        """
+        长期进展奖励 - 基于目标检测的总体趋势
+        """
+        if not detection_results:
+            self.no_progress_steps += 1
+            return -0.01
+        else:
+            # 如果检测到目标，减少无进展计数
+            self.no_progress_steps = max(0, self.no_progress_steps - 1)
+            return 0.01
+
+    def _calculate_target_presence_reward(self, detection_results):
+        """
+        最小化的存在奖励 - 仅当检测到目标时给予小奖励
+        """
+        if detection_results:
+            # 检测到gate给予稍高奖励
+            gate_detected = any(
+                'gate' in detection['label'].lower() or detection['label'].lower() == 'gate'
+                for detection in detection_results
+            )
+            if gate_detected:
+                return 0.05
+            else:
+                return 0.01  # 检测到其他目标的小奖励
+        return -0.01  # 未检测到任何目标的轻微惩罚
+
+    def _calculate_frame_difference(self, frame1, frame2):
+        """
+        计算两帧之间的差异程度
+        """
+        # 转换为灰度图
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        
+        # 计算绝对差值
+        diff = cv2.absdiff(gray1, gray2)
+        
+        # 计算平均差异值
+        mean_diff = np.mean(diff) / 255.0  # 归一化到[0,1]
+        
+        return mean_diff
+
+    def _get_max_detection_area(self, detection_results):
+        """
+        获取检测结果中的最大面积
+        """
+        if not detection_results:
+            return 0
+        return max([det['width'] * det['height'] for det in detection_results])
 
     def reset_to_origin(self):
         """
@@ -664,9 +926,6 @@ class TargetSearchEnvironment:
                     cls_id = int(cls_ids[i])
                     class_name = names.get(cls_id, f"Class_{cls_id}")
                     
-                    center_x = (x1 + x2) / 2
-                    center_y = (y1 + y2) / 2
-                    
                     width = x2 - x1
                     height = y2 - y1
                     
@@ -684,70 +943,6 @@ class TargetSearchEnvironment:
             self.logger.error(f"YOLO检测过程中出错: {e}")
             return []
 
-    def calculate_reward(self, detection_results, prev_distance, action_taken=None, prev_area=None):
-        """
-        改进的奖励函数，更平滑的奖励分布
-        """
-        reward = 0.0
-        
-        if not detection_results or len(detection_results) == 0:
-            # 降低未检测到目标的惩罚
-            reward = CONFIG.get('NO_DETECTION_PENALTY', -0.01)
-            self.logger.debug(f"未检测到目标，奖励: {reward:.2f}")
-            return reward, 0
-        
-        # 计算所有检测结果的综合奖励
-        total_reward = 0
-        max_area = 0
-        
-        for detection in detection_results:
-            bbox = detection['bbox']
-            center_x = (bbox[0] + bbox[2]) / 2
-            center_y = (bbox[1] + bbox[3]) / 2
-            
-            img_width = detection.get('img_width', CONFIG['IMAGE_WIDTH'])
-            img_height = detection.get('img_height', CONFIG['IMAGE_HEIGHT'])
-            
-            img_center_x = img_width / 2
-            img_center_y = img_height / 2
-            distance = np.sqrt((center_x - img_center_x)**2 + (center_y - img_center_y)**2)
-            
-            area = detection['width'] * detection['height']
-            if area > max_area:
-                max_area = area
-
-        
-            # 基于面积的奖励 - 面积越大说明越接近目标
-            size_reward = min(area / 100000, 1.0)  # 归一化到[0,1]
-            
-            # 检测置信度奖励
-            confidence_reward = detection['score']
-            
-            # 综合奖励
-            detection_reward = (
-                
-                CONFIG.get('SIZE_WEIGHT', 0.4) * size_reward +
-                CONFIG.get('CONFIDENCE_WEIGHT', 0.3) * confidence_reward
-            )
-            
-            total_reward += detection_reward
-
-        # 如果检测到特定目标（如gate）
-        gate_detected = any(
-            'gate' in detection['label'].lower() or detection['label'].lower() == 'gate'
-            for detection in detection_results
-        )
-        
-        if gate_detected:
-            total_reward += CONFIG.get('GATE_DETECTION_BONUS', 0.2)
-        
-        # 探索奖励
-        exploration_bonus = CONFIG.get('EXPLORATION_BONUS', 0.01) if len(detection_results) > 0 else 0
-        
-        final_reward = total_reward + exploration_bonus
-        
-        self.logger.debug(f"检测到 {len(detection_results)} 个目标，奖励: {final_reward:.2f}")
-        return final_reward, max_area
     def step(self, move_action, turn_action, move_forward_step=2, turn_angle=30):
         """
         执行动作并返回新的状态、奖励和是否结束
@@ -769,33 +964,40 @@ class TargetSearchEnvironment:
         
         if pre_climb_detected:
             self.logger.info(f"动作执行前已检测到climb类别，立即终止")
-            reward, new_area = self.calculate_reward(pre_action_detections, self.last_center_distance, (move_action, turn_action), self.last_area)
-            speed_bonus = CONFIG['BASE_COMPLETION_REWARD'] / max(1, self.step_count + 1)
-            reward += speed_bonus
+            
+            # 完成奖励
+            base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
+            speed_bonus = CONFIG.get('QUICK_COMPLETION_BONUS_FACTOR', 8) * (self.max_steps - self.step_count)
+            reward = base_completion_reward + speed_bonus
+            
+            new_area = self._get_max_detection_area(pre_action_detections)
             self.last_area = new_area
             self.last_detection_result = pre_action_detections
             self.step_count += 1
             
             print(f"Step {self.step_count}, Area: {new_area:.2f}, Reward: {reward:.2f}, "
-                f"Detected: climb (pre-action), Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}")
+                  f"Detected: climb (pre-action), Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}")
             
             return pre_action_state, reward, True, pre_action_detections
         
+        # 记录执行动作前的帧
+        pre_action_frame = pre_action_state.copy() if pre_action_state is not None else None
+        
         # 执行移动动作
         if move_action == 0 and move_forward_step > 0:  # forward
-            self.controller.move_forward(duration=move_forward_step* CONFIG['forward_coe'])
+            self.controller.move_forward(duration=move_forward_step * CONFIG['forward_coe'])
         elif move_action == 1 and move_forward_step > 0:  # backward
-            self.controller.move_backward(duration=move_forward_step* CONFIG['forward_coe'])
+            self.controller.move_backward(duration=move_forward_step * CONFIG['forward_coe'])
         elif move_action == 2 and move_forward_step > 0:  # strafe_left
-            self.controller.strafe_left(duration=move_forward_step* CONFIG['forward_coe'])
+            self.controller.strafe_left(duration=move_forward_step * CONFIG['forward_coe'])
         elif move_action == 3 and move_forward_step > 0:  # strafe_right
-            self.controller.strafe_right(duration=move_forward_step* CONFIG['forward_coe'])
+            self.controller.strafe_right(duration=move_forward_step * CONFIG['forward_coe'])
         
         # 执行转头动作
         if turn_action == 0 and turn_angle > 0:  # turn_left
-            self.controller.turn_left(turn_angle*CONFIG['turn_coe'], duration=1)
+            self.controller.turn_left(turn_angle * CONFIG['turn_coe'], duration=1)
         elif turn_action == 1 and turn_angle > 0:  # turn_right
-            self.controller.turn_right(turn_angle*CONFIG['turn_coe'], duration=1)
+            self.controller.turn_right(turn_angle * CONFIG['turn_coe'], duration=1)
 
         # 获取新状态（截图）
         new_state = self.capture_screen()
@@ -803,35 +1005,15 @@ class TargetSearchEnvironment:
         # 检测目标
         detection_results = self.detect_target(new_state)
         
-        # 计算奖励
-        current_distance = self.last_center_distance
-        current_area = self.last_area
-        area = 0
-        if detection_results:
-            min_distance = float('inf')
-            max_area = 0
-            for detection in detection_results:
-                bbox = detection['bbox']
-                center_x = (bbox[0] + bbox[2]) / 2
-                center_y = (bbox[1] + bbox[3]) / 2
-                img_center_x = new_state.shape[1] / 2
-                img_center_y = new_state.shape[0] / 2
-                detection['img_width'] = new_state.shape[1]
-                detection['img_height'] = new_state.shape[0]
-                
-                distance = np.sqrt((center_x - img_center_x)**2 + (center_y - img_center_y)**2)
-                
-                if distance < min_distance:
-                    min_distance = distance
-                
-                area = detection['width'] * detection['height']
-                if area > max_area:
-                    max_area = area
-            current_distance = min_distance
-            current_area = max_area
-
-        reward, new_area = self.calculate_reward(detection_results, self.last_center_distance, (move_action, turn_action), current_area)
-        self.last_center_distance = current_distance
+        # 计算奖励 - 使用全新的奖励函数
+        reward, new_area = self.calculate_reward(
+            detection_results, 
+            self.last_center_distance, 
+            (move_action, turn_action), 
+            self.last_area
+        )
+        
+        # 更新状态
         self.last_area = new_area
         self.last_detection_result = detection_results
         
@@ -851,21 +1033,20 @@ class TargetSearchEnvironment:
             # 基础完成奖励
             base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
             
-            # 快速完成奖励：步数越少，奖励越高
-            quick_completion_bonus = 0
-
-                # 根据完成步数给予递减奖励，越快完成奖励越多
+            # 快速完成奖励
             quick_completion_factor = CONFIG.get('QUICK_COMPLETION_BONUS_FACTOR', 8)
-            quick_completion_bonus = quick_completion_factor*(self.max_steps-self.step_count) 
-        
-            # 总奖励 = 当前奖励 + 基础奖励 + 快速完成奖励
+            quick_completion_bonus = quick_completion_factor * (self.max_steps - self.step_count) 
+            
+            # 总奖励
             total_completion_bonus = base_completion_reward + quick_completion_bonus
             reward += total_completion_bonus
-            self.logger.info(f"检测到climb类别！步骤: {self.step_count}, 基础奖励: {base_completion_reward:.2f}, 快速完成奖励: {quick_completion_bonus:.2f}, 总奖励: {total_completion_bonus:.2f}")
+            self.logger.info(f"检测到climb类别！步骤: {self.step_count}, 基础奖励: {base_completion_reward:.2f}, "
+                            f"快速完成奖励: {quick_completion_bonus:.2f}, 总奖励: {total_completion_bonus:.2f}")
+
         # 输出每步得分
-        print(f"Step {self.step_count}, Area: {current_area:.2f}, Reward: {reward:.2f}, "
-            f" Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}, "
-            f"Move Step: {move_forward_step:.3f}, Turn Angle: {turn_angle:.3f}")
+        print(f"Step {self.step_count}, Area: {new_area:.2f}, Reward: {reward:.3f}, "
+              f"Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}, "
+              f"Move Step: {move_forward_step:.3f}, Turn Angle: {turn_angle:.3f}")
         
         # 更新位置历史
         state_feature = len(detection_results) if detection_results else 0
@@ -891,5 +1072,10 @@ class TargetSearchEnvironment:
         self.last_area = 0
         self.last_detection_result = None
         self.position_history = []
+        self.action_history.clear()
+        self.visual_change_history.clear()
+        self.no_progress_steps = 0
+        self.total_no_progress_steps = 0
+        self.previous_frame = None
         initial_state = self.capture_screen()
         return initial_state
