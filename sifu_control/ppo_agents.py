@@ -145,7 +145,7 @@ class ResNetFeatureExtractor(nn.Module):
 
 class GRUPolicyNetwork(nn.Module):
     """
-    带有GRU的策略网络 - 增强输出多样性
+    带有GRU的策略网络 - 增强输出多样性，并支持输出中间层值
     """
     def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=128):
         super(GRUPolicyNetwork, self).__init__()
@@ -195,8 +195,11 @@ class GRUPolicyNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 1)
         )
+        
+        # 添加标志位控制是否输出调试信息
+        self.debug_mode = False
 
-    def forward(self, states, hidden_state=None):
+    def forward(self, states, hidden_state=None, return_debug_info=False):
         batch_size = states.size(0)
         seq_len = states.size(1)
         
@@ -223,14 +226,30 @@ class GRUPolicyNetwork(nn.Module):
         # Critic output
         value = self.critic(last_output)
         
-        return (
-            F.softmax(move_logits, dim=-1),
-            F.softmax(turn_logits, dim=-1),
-            action_params,
-            value,
-            hidden
-        )
-
+        if return_debug_info:
+            debug_info = {
+                'gru_last_output': last_output.detach().cpu().numpy(),
+                'move_logits': move_logits.detach().cpu().numpy(),
+                'turn_logits': turn_logits.detach().cpu().numpy(),
+                'action_params': action_params.detach().cpu().numpy(),
+                'value': value.detach().cpu().numpy()
+            }
+            return (
+                F.softmax(move_logits, dim=-1),
+                F.softmax(turn_logits, dim=-1),
+                action_params,
+                value,
+                hidden,
+                debug_info
+            )
+        else:
+            return (
+                F.softmax(move_logits, dim=-1),
+                F.softmax(turn_logits, dim=-1),
+                action_params,
+                value,
+                hidden
+            )
 
 class GRUMemory:
     """
@@ -268,7 +287,7 @@ class GRUMemory:
 
 class GRUPPOAgent:
     """
-    基于GRU的PPO智能体
+    基于GRU的PPO智能体 - 增加收敛监控
     """
     def __init__(self, state_dim, move_action_dim, turn_action_dim):
         config = CONFIG
@@ -299,8 +318,43 @@ class GRUPPOAgent:
         
         # State history for sequence input
         self.state_history = deque(maxlen=self.sequence_length)
+        
+        # 收敛监控相关变量
+        self.convergence_monitor = {
+            'episode_rewards': [],
+            'episode_lengths': [],
+            'episode_successes': [],
+            'loss_history': [],
+            'learning_rates': [],
+            'grad_norms': [],
+            'entropy_history': [],
+            'kl_divergence': []
+        }
+        
+        # 早停相关
+        self.best_avg_reward = float('-inf')
+        self.no_improve_count = 0
+        self.patience = config.get('EARLY_STOP_PATIENCE', 50)
+        
+        # 学习率调度器 - 移除verbose参数
+        try:
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, 
+                mode='max', 
+                factor=0.5, 
+                patience=10
+                # 注意：这里移除了verbose参数，因为它在某些PyTorch版本中不受支持
+            )
+        except TypeError:
+            # 如果仍然有问题，提供备选方案
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, 
+                mode='max', 
+                factor=0.5, 
+                patience=10
+            )
 
-    def act(self, state, memory):
+    def act(self, state, memory, return_debug_info=False):
         # 预处理状态
         state_tensor = self._preprocess_state(state)
         
@@ -316,8 +370,11 @@ class GRUPPOAgent:
         
         # 使用旧策略获取动作概率
         with torch.no_grad():
-            move_probs, turn_probs, action_params, state_val, _ = self.policy_old(state_seq)
-            
+            if return_debug_info:
+                move_probs, turn_probs, action_params, state_val, _, debug_info = self.policy_old(state_seq, return_debug_info=True)
+            else:
+                move_probs, turn_probs, action_params, state_val, _ = self.policy_old(state_seq)
+                
             move_dist = Categorical(move_probs)
             turn_dist = Categorical(turn_probs)
             
@@ -355,7 +412,6 @@ class GRUPPOAgent:
         turn_raw_clipped = np.clip(turn_raw_with_noise, -1.0, 1.0)
         
         # 使用非线性映射，让边缘值更容易出现
-        # 将 [-1, 1] 映射到 [0, 1]，但使用sigmoid-like函数让极值更容易出现
         def enhanced_mapping(raw_value):
             # 将 [-1, 1] 映射到 [-3, 3] 以扩大sigmoid的作用范围
             expanded_value = raw_value * 3.0
@@ -381,14 +437,15 @@ class GRUPPOAgent:
             [move_forward_step_normalized, turn_angle_normalized]  # 存储归一化的参数
         )
         
-        return move_action.item(), turn_action.item(), move_forward_step, turn_angle
-
+        if return_debug_info:
+            return move_action.item(), turn_action.item(), move_forward_step, turn_angle, debug_info
+        else:
+            return move_action.item(), turn_action.item(), move_forward_step, turn_angle
     def update(self, memory):
         if len(memory.states) == 0:
             return
             
         # Convert memory to tensors - 保持单个episode的序列结构
-        # 将memory中的数据作为单一序列处理
         states_list = list(memory.states)
         if len(states_list) == 0:
             return
@@ -420,6 +477,13 @@ class GRUPPOAgent:
             # 如果只有一个元素，跳过标准化
             pass
 
+        # 初始化梯度范数和其他指标变量
+        total_loss = 0
+        total_actor_loss = 0
+        total_critic_loss = 0
+        total_entropy = 0
+        grad_norm = 0  # 初始化梯度范数，防止变量未定义错误
+        
         # Optimize policy K epochs
         for _ in range(self.K_epochs):
             # Forward pass - 获取整个序列的输出
@@ -434,18 +498,12 @@ class GRUPPOAgent:
             
             # 检查维度并确保有足够的维度进行gather操作
             if move_probs_squeezed.dim() == 1:
-                # 如果只有1个动作类别的概率，我们不需要gather
-                # 这种情况不应该发生，因为我们应该有多个动作选项
                 if move_probs_squeezed.size(0) == len(move_actions):
-                    # 概率分布与动作数量不匹配，需要重新检查
-                    # 重新构建概率矩阵，每个时间步一个动作的概率
                     move_probs_squeezed = move_probs_squeezed.unsqueeze(0).expand(len(move_actions), -1)
                 else:
-                    # 如果概率张量形状不正确，跳过这次更新
                     continue
                     
             if turn_probs_squeezed.dim() == 1:
-                # 同样的处理
                 if turn_probs_squeezed.size(0) == len(turn_actions):
                     turn_probs_squeezed = turn_probs_squeezed.unsqueeze(0).expand(len(turn_actions), -1)
                 else:
@@ -459,32 +517,26 @@ class GRUPPOAgent:
             try:
                 # 使用更安全的gather操作
                 if move_probs_squeezed.size(0) != move_actions.size(0):
-                    # 如果序列长度不匹配，截断到较短的长度
                     min_len = min(move_probs_squeezed.size(0), move_actions.size(0))
                     move_probs_squeezed = move_probs_squeezed[:min_len]
                     move_actions = move_actions[:min_len]
                     
                 if turn_probs_squeezed.size(0) != turn_actions.size(0):
-                    # 如果序列长度不匹配，截断到较短的长度
                     min_len = min(turn_probs_squeezed.size(0), turn_actions.size(0))
                     turn_probs_squeezed = turn_probs_squeezed[:min_len]
                     turn_actions = turn_actions[:min_len]
                 
                 # 现在进行gather操作
                 gathered_move = move_probs_squeezed.gather(1, move_actions.unsqueeze(1))
-                move_logprobs = torch.log(gathered_move.squeeze(-1))  # 使用squeeze(-1)替代squeeze(1)
+                move_logprobs = torch.log(gathered_move.squeeze(-1))
                 
                 gathered_turn = turn_probs_squeezed.gather(1, turn_actions.unsqueeze(1))
-                turn_logprobs = torch.log(gathered_turn.squeeze(-1))  # 使用squeeze(-1)替代squeeze(1)
+                turn_logprobs = torch.log(gathered_turn.squeeze(-1))
                 
                 logprobs = move_logprobs + turn_logprobs
                 
             except IndexError as e:
                 print(f"Gather操作索引错误: {e}")
-                print(f"move_probs_squeezed shape: {move_probs_squeezed.shape}")
-                print(f"move_actions shape: {move_actions.shape}")
-                print(f"turn_probs_squeezed shape: {turn_probs_squeezed.shape}")
-                print(f"turn_actions shape: {turn_actions.shape}")
                 continue
             except RuntimeError as e:
                 print(f"Gather操作运行时错误: {e}")
@@ -518,10 +570,126 @@ class GRUPPOAgent:
             # 添加梯度裁剪以避免梯度爆炸
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=CONFIG.get('GRADIENT_CLIP_NORM', 0.5))
             loss.backward()
+            
+            # 计算梯度范数用于监控
+            total_norm = 0
+            param_count = 0
+            for p in self.policy.parameters():
+                if p.grad is not None:
+                    param_count += 1
+                    total_norm += p.grad.data.norm(2).item() ** 2
+            grad_norm = (total_norm / param_count) ** 0.5 if param_count > 0 else 0
+            
             self.optimizer.step()
+            
+            # 累积损失值用于监控
+            total_loss += loss.item()
+            total_actor_loss += actor_loss.item()
+            total_critic_loss += critic_loss.item()
+            total_entropy += entropy_bonus.item()
 
         # Copy new weights into old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
+        
+        # 更新收敛监控数据
+        self.convergence_monitor['loss_history'].append({
+            'total_loss': total_loss / self.K_epochs,
+            'actor_loss': total_actor_loss / self.K_epochs,
+            'critic_loss': total_critic_loss / self.K_epochs,
+            'entropy': total_entropy / self.K_epochs,
+            'grad_norm': grad_norm  # 现在即使循环没有执行，变量也已定义
+        })
+        
+        # 记录当前学习率
+        current_lr = self.optimizer.param_groups[0]['lr']
+        self.convergence_monitor['learning_rates'].append(current_lr)
+    def check_convergence_status(self, episode_reward, episode_length, success_flag=False):
+        """
+        检查收敛状态并返回相关信息
+        """
+        self.convergence_monitor['episode_rewards'].append(episode_reward)
+        self.convergence_monitor['episode_lengths'].append(episode_length)
+        self.convergence_monitor['episode_successes'].append(success_flag)
+        
+        # 计算滑动窗口统计数据
+        window_size = 20  # 可配置的滑动窗口大小
+        recent_rewards = self.convergence_monitor['episode_rewards'][-window_size:]
+        recent_lengths = self.convergence_monitor['episode_lengths'][-window_size:]
+        recent_successes = self.convergence_monitor['episode_successes'][-window_size:]
+        
+        if len(recent_rewards) >= window_size:
+            avg_reward = np.mean(recent_rewards)
+            avg_length = np.mean(recent_lengths)
+            success_rate = np.mean(recent_successes)
+            
+            # 更新早停计数
+            if avg_reward > self.best_avg_reward:
+                self.best_avg_reward = avg_reward
+                self.no_improve_count = 0
+            else:
+                self.no_improve_count += 1
+            
+            # 如果性能持续下降，降低学习率
+            if len(recent_rewards) >= 10:
+                recent_trend = np.polyfit(range(len(recent_rewards[-10:])), recent_rewards[-10:], 1)
+                if recent_trend[0] < -0.05:  # 负斜率超过阈值，说明性能在下降
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = max(param_group['lr'] * 0.9, 1e-6)  # 最小学习率1e-6
+            
+            # 更新学习率调度器
+            self.scheduler.step(avg_reward)
+            
+            return {
+                'avg_recent_reward': avg_reward,
+                'avg_recent_length': avg_length,
+                'recent_success_rate': success_rate,
+                'should_stop_early': self.no_improve_count >= self.patience,
+                'current_patience': self.patience - self.no_improve_count,
+                'current_learning_rate': self.optimizer.param_groups[0]['lr'],
+                'is_improving': recent_trend[0] > 0 if len(recent_rewards) >= 10 else True
+            }
+        
+        return {
+            'avg_recent_reward': np.mean(recent_rewards) if recent_rewards else 0,
+            'avg_recent_length': np.mean(recent_lengths) if recent_lengths else 0,
+            'recent_success_rate': np.mean(recent_successes) if recent_successes else 0,
+            'should_stop_early': False,
+            'current_patience': self.patience,
+            'current_learning_rate': self.optimizer.param_groups[0]['lr'],
+            'is_improving': True
+        }
+
+    def get_convergence_report(self):
+        """
+        获取收敛报告
+        """
+        report = {}
+        
+        if self.convergence_monitor['loss_history']:
+            recent_losses = self.convergence_monitor['loss_history'][-10:]
+            report['recent_avg_total_loss'] = np.mean([l['total_loss'] for l in recent_losses])
+            report['recent_avg_actor_loss'] = np.mean([l['actor_loss'] for l in recent_losses])
+            report['recent_avg_critic_loss'] = np.mean([l['critic_loss'] for l in recent_losses])
+            report['recent_avg_entropy'] = np.mean([l['entropy'] for l in recent_losses])
+            report['recent_avg_grad_norm'] = np.mean([l['grad_norm'] for l in recent_losses])
+        
+        if self.convergence_monitor['learning_rates']:
+            report['current_learning_rate'] = self.convergence_monitor['learning_rates'][-1]
+            report['learning_rate_trend'] = 'decreasing' if len(self.convergence_monitor['learning_rates']) > 1 and \
+                self.convergence_monitor['learning_rates'][-1] < self.convergence_monitor['learning_rates'][0] else 'stable'
+        
+        if len(self.convergence_monitor['episode_rewards']) >= 20:
+            recent_rewards = self.convergence_monitor['episode_rewards'][-20:]
+            reward_trend = np.polyfit(range(len(recent_rewards)), recent_rewards, 1)[0]
+            report['reward_trend'] = reward_trend
+            report['is_converging'] = reward_trend > 0  # 正斜率表示改善趋势
+        
+        report['total_episodes_trained'] = len(self.convergence_monitor['episode_rewards'])
+        report['total_updates'] = len(self.convergence_monitor['loss_history'])
+        report['success_rate'] = np.mean(self.convergence_monitor['episode_successes']) if self.convergence_monitor['episode_successes'] else 0
+        
+        return report
+
     def _preprocess_state(self, state):
         """
         预处理状态（图像）
@@ -1114,7 +1282,7 @@ class TargetSearchEnvironment:
                             f"快速完成奖励: {quick_completion_bonus:.2f}, 总奖励: {total_completion_bonus:.2f}")
 
         # 输出每步得分
-        print(f"Step {self.step_count}, Area: {new_area:.2f}, Reward: {reward:.3f}, "
+        print(f"S {self.step_count}, A: {new_area:.2f}, R: {reward:.3f}, "
               f"Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}, "
               f"Move Step: {move_forward_step:.3f}, Turn Angle: {turn_angle:.3f}")
         

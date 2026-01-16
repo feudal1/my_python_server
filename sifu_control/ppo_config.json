@@ -41,7 +41,11 @@
     "MOVE_STEP_MIN": 0,            
     "MOVE_STEP_MAX": 1,             
     "TURN_ANGLE_MIN": 10.0,           
-    "TURN_ANGLE_MAX": 50.0
+    "TURN_ANGLE_MAX": 50.0,
+      "EARLY_STOP_PATIENCE": 50,
+  "CONVERGENCE_WINDOW_SIZE": 20,
+  "MIN_LEARNING_RATE": 1e-6,
+  "REDUCE_LR_ON_PLATEAU": true
     
   }
 }
