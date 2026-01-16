@@ -110,27 +110,28 @@ class ResidualBlock(nn.Module):
         return out
 
 
+# 在 ppo_agents.py 中修改 ResNetFeatureExtractor
 class ResNetFeatureExtractor(nn.Module):
     """
-    ResNet特征提取器
+    增强版ResNet特征提取器 - 提高区分能力
     """
-    def __init__(self, input_channels=3, block_channels=[32, 64, 128]):
+    def __init__(self, input_channels=3, block_channels=[32, 64, 128, 256]):
         super(ResNetFeatureExtractor, self).__init__()
         
         # 使用配置文件中的图像尺寸
         height = CONFIG.get('IMAGE_HEIGHT', 480)
         width = CONFIG.get('IMAGE_WIDTH', 640)
         
-        # 初始卷积层
+        # 初始卷积层 - 增加感受野
         self.conv1 = nn.Conv2d(input_channels, block_channels[0], 
                               kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(block_channels[0])
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         
-        # ResNet层
+        # ResNet层 - 增加层数和通道数
         layers = []
-        # 第一层
+        # 第一层 - 保持原有
         layers.append(ResidualBlock(block_channels[0], block_channels[0]))
         layers.append(ResidualBlock(block_channels[0], block_channels[0]))
         
@@ -142,10 +143,15 @@ class ResNetFeatureExtractor(nn.Module):
         layers.append(ResidualBlock(block_channels[1], block_channels[2], stride=2))
         layers.append(ResidualBlock(block_channels[2], block_channels[2]))
         
+        # 第四层 - 新增，进一步下采样
+        layers.append(ResidualBlock(block_channels[2], block_channels[3], stride=2))
+        layers.append(ResidualBlock(block_channels[3], block_channels[3]))
+        
         self.layers = nn.Sequential(*layers)
         
-        # 全局平均池化
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        # 全局平均池化 - 增大输出维度
+        self.avgpool = nn.AdaptiveAvgPool2d((2, 2))  # 从(1,1)改为(2,2)，保留更多空间信息
+        self.fc_features = nn.Linear(block_channels[3] * 4, 512)  # 从展平后映射到512维特征
 
     def forward(self, x):
         x = self.conv1(x)
@@ -157,87 +163,117 @@ class ResNetFeatureExtractor(nn.Module):
         
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)  # 展平
-        
+        x = self.fc_features(x)  # 映射到更高维特征空间
         return x
-
 
 class EnhancedGRUPolicyNetwork(nn.Module):
     """
-    增强版带有GRU的策略网络 - 改进价值函数输出，增强卡死检测
+    增强版带有GRU的策略网络 - 更强的表达能力
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=128):
+    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256):  # 增加隐藏层大小
         super(EnhancedGRUPolicyNetwork, self).__init__()
         
         self.feature_extractor = ResNetFeatureExtractor(3)
-        feature_size = 128  # 根据ResNetFeatureExtractor的输出调整
+        feature_size = 512  # 根据上面的修改调整
         
-        # 双向GRU层 - 更好地捕获序列信息
+        # 增加GRU复杂度
         self.gru = nn.GRU(
             feature_size, 
             hidden_size, 
-            num_layers=2, 
+            num_layers=3,  # 增加层数
             batch_first=True, 
-            dropout=0.1,
-            bidirectional=True  # 双向GRU
+            dropout=0.2,  # 增加dropout
+            bidirectional=True
         )
-        self.gru_output = nn.Linear(hidden_size * 2, hidden_size)  # 处理双向GRU输出
+        self.gru_output = nn.Linear(hidden_size * 2, hidden_size)
         
-        # Actor heads
+        # Actor heads - 增加复杂度
         self.move_actor = nn.Sequential(
-            nn.Linear(hidden_size, 256),  # 增加隐藏层大小
+            nn.Linear(hidden_size, 512),  # 增加维度
+            nn.LayerNorm(512),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, move_action_dim)
+            nn.Linear(128, move_action_dim)
         )
         
         self.turn_actor = nn.Sequential(
-            nn.Linear(hidden_size, 256),  # 增加隐藏层大小
+            nn.Linear(hidden_size, 512),
+            nn.LayerNorm(512),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, turn_action_dim)
+            nn.Linear(128, turn_action_dim)
         )
         
-        # Action parameter prediction head - 使用不同的激活函数
+        # Action parameter head - 增加非线性
         self.action_param_head = nn.Sequential(
-            nn.Linear(hidden_size, 128),
-            nn.LeakyReLU(negative_slope=0.01),  # 使用LeakyReLU增加非线性
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(64, 2),
-            nn.Tanh()  # 保持tanh输出到[-1,1]范围
-        )
-        
-        # 增强的价值网络 - 提高价值函数输出的幅度
-        self.critic = nn.Sequential(
-            nn.Linear(hidden_size, 256),  # 增加宽度
-            nn.ReLU(),
+            nn.Linear(hidden_size, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(),  # 使用SiLU激活
             nn.Dropout(0.3),
             nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.SiLU(),
             nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),  # 新增一层
-            nn.ReLU(),
-            nn.Linear(32, 1)
+            nn.SiLU(),
+            nn.Linear(64, 2),
+            nn.Tanh()
         )
         
-        # 添加标志位控制是否输出调试信息
-        self.debug_mode = False
+        # Value network - 增强
+        self.critic = nn.Sequential(
+            nn.Linear(hidden_size, 512),
+            nn.LayerNorm(512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
         
         # 初始化logger
         self.logger = setup_logging()
+        
+        # 使用更好的权重初始化
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """更好的权重初始化"""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('relu'))
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.GRU):
+            for name, param in module.named_parameters():
+                if 'weight_ih' in name:
+                    nn.init.xavier_uniform_(param.data)
+                elif 'weight_hh' in name:
+                    nn.init.orthogonal_(param.data)
+                elif 'bias' in name:
+                    param.data.fill_(0)
+                    # 设置偏置让GRU更容易记住长期信息
+                    n = param.size(0)
+                    param.data[:n//4].fill_(1.0)
 
     def forward(self, states, hidden_state=None, return_debug_info=False):
         batch_size = states.size(0)
@@ -252,7 +288,7 @@ class EnhancedGRUPolicyNetwork(nn.Module):
         
         # Pass through GRU
         gru_out, hidden = self.gru(features, hidden_state)
-        gru_out = self.gru_output(gru_out)  # 处理双向GRU输出
+        gru_out = self.gru_output(gru_out)
         
         # Use the last output from GRU
         last_output = gru_out[:, -1, :]
@@ -261,7 +297,7 @@ class EnhancedGRUPolicyNetwork(nn.Module):
         move_logits = self.move_actor(last_output)
         turn_logits = self.turn_actor(last_output)
         
-        # Action parameters - 使用tanh确保输出在[-1,1]之间
+        # Action parameters
         action_params = torch.tanh(self.action_param_head(last_output))
         
         # Critic output
@@ -284,6 +320,13 @@ class EnhancedGRUPolicyNetwork(nn.Module):
             self.logger.info(f"Turn: {[round(float(x), 2) for x in debug_info['turn_logits'][0][:10]]}")
             self.logger.info(f"参数: {[round(float(x), 2) for x in debug_info['action_params'][0]]}")
             self.logger.info(f"价值: {round(float(debug_info['value'][0][0]), 2)}")
+            
+            # 添加状态差异检测
+            if len(self.feature_extractor.train()) > 1:
+                # 计算特征差异
+                feature_diff = torch.mean(torch.abs(features[0] - features[1])).item()
+                self.logger.info(f"特征差异: {feature_diff:.4f}")
+            
             return (
                 F.softmax(move_logits, dim=-1),
                 F.softmax(turn_logits, dim=-1),
@@ -300,6 +343,7 @@ class EnhancedGRUPolicyNetwork(nn.Module):
                 value,
                 hidden
             )
+
 class GRUMemory:
     """
     GRU智能体的记忆存储类
@@ -426,56 +470,47 @@ class EnhancedTargetSearchEnvironment:
         self.frame_change_threshold = 0.05  # 视觉变化阈值
         self.no_progress_steps = 0  # 连续无进展步数
         self.total_no_progress_steps = 0  # 总无进展步数
-
-    def calculate_reward(self, detection_results, prev_distance, action_taken=None, prev_area=None):
+        self.state_difficulty_tracker = {
+        'recent_states': deque(maxlen=10),
+        'state_variance': 0.0,
+        'state_diversity_score': 0.0
+    }
+    def capture_screen(self):
         """
-        完全新版的奖励函数 - 专注于物理移动的有效性
+        截取当前屏幕画面，并计算状态多样性
         """
-        reward = 0.0
-        
-        # 1. 视觉变化分析奖励
-        visual_change_reward = self._calculate_visual_change_reward(action_taken)
-        reward += visual_change_reward
-        
-        # 2. 动作一致性奖励
-        consistency_reward = self._calculate_action_consistency_reward(action_taken)
-        reward += consistency_reward
-        
-        # 3. 卡死惩罚
-        stuck_penalty = self._calculate_stuck_penalty()
-        reward += stuck_penalty
-        
-        # 4. 探索奖励
-        exploration_reward = self._calculate_exploration_reward()
-        reward += exploration_reward
-        
-        # 5. 重复动作惩罚
-        repetition_penalty = self._calculate_repetition_penalty(action_taken)
-        reward += repetition_penalty
-        
-        # 6. 长期进展奖励
-        progress_reward = self._calculate_progress_reward(detection_results)
-        reward += progress_reward
-        
-        # 7. 目标检测奖励（最小化，主要作为辅助）
-        target_reward = self._calculate_target_presence_reward(detection_results)
-        reward += target_reward
-        
-        # 更新内部状态
-        current_frame = self.capture_screen()
-        if current_frame is not None:
-            self.previous_frame = current_frame.copy()
-        
-        if action_taken:
-            self.action_history.append(action_taken)
-            self.stuck_detector.record_action(action_taken)
-        
-        # 记录位置特征用于卡死检测
-        position_feature = self._extract_position_feature(current_frame, detection_results)
-        self.stuck_detector.record_position(position_feature)
-        
-        return reward, self._get_max_detection_area(detection_results)
-
+        try:
+            project_root = Path(__file__).parent.parent
+            sys.path.insert(0, str(project_root))
+            from computer_server.prtsc import capture_window_by_title
+            result = capture_window_by_title("sifu", "sifu_window_capture.png")
+            if result:
+                screenshot = Image.open("sifu_window_capture.png")
+                screenshot = np.array(screenshot)
+                screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+            else:
+                self.logger.warning("未找到包含 'sifu' 的窗口，使用全屏截图")
+                screenshot = pyautogui.screenshot()
+                screenshot = np.array(screenshot)
+                screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+            
+            # 计算图像差异性
+            gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            # 存储最近的状态用于多样性计算
+            if len(self.state_difficulty_tracker['recent_states']) > 0:
+                # 计算与之前状态的差异
+                prev_state = self.state_difficulty_tracker['recent_states'][-1]
+                state_diff = np.mean(np.abs(screenshot.astype(np.float32) - prev_state.astype(np.float32)))
+                self.state_difficulty_tracker['state_variance'] = state_diff
+            
+            self.state_difficulty_tracker['recent_states'].append(screenshot.copy())
+            
+            return screenshot
+        except ImportError:
+            self.logger.warning("截图功能不可用，使用模拟图片")
+            return np.zeros((CONFIG['IMAGE_HEIGHT'], CONFIG['IMAGE_WIDTH'], 3), dtype=np.uint8)
     def _extract_position_feature(self, frame, detections):
         """提取位置特征用于重复检测"""
         if frame is None:

@@ -1,51 +1,42 @@
 {
-  "config": {
-    "ENV_MAX_STEPS": 60,
-    "EVAL_MAX_STEPS": 60,
-    "MIN_GATE_AREA": 50000,
-    "CENTER_THRESHOLD": 180,
-    "DETECTION_CONFIDENCE": 0.8,
-    "POSITION_HISTORY_LENGTH": 15,
-    "TARGET_DESCRIPTION": "gate",
-    "BASE_COMPLETION_REWARD":150,
-    "QUICK_COMPLETION_BONUS_FACTOR": 3,
-     "GATE_DETECTION_BONUS": 0.2,
-    "EXPLORATION_BONUS": 0.01,
-    "BASE_DETECTION_REWARD": 0.2,
-    "NO_DETECTION_PENALTY": -0.01,
-    "IMAGE_WIDTH": 640,
-    "IMAGE_HEIGHT": 480,
-    "forward_coe": 10,
-    "turn_coe": 6,
-    "EPISODES": 100,
-    "LEARNING_RATE": 0.001,
-    "GAMMA": 0.92,
-    "K_EPOCHS": 8,
-    "EPS_CLIP": 0.3,
-    "BATCH_SIZE": 16,
-    "SEQUENCE_LENGTH": 20,
-    "HIDDEN_SIZE": 128,
-    "MODEL_PATH": "./model/gate_search_gru_ppo_model.pth",
-    "NOISE_SCALE": 0.1,
-    "GRADIENT_CLIP_NORM": 1.0,
-    "CHECKPOINT_INTERVAL": 10,
-    "UPDATE_INTERVAL": 5,
-    "EVAL_EPISODES": 5,
-        "CENTER_ALIGNMENT_WEIGHT": 0.3,
-    "SIZE_WEIGHT": 0.4,
-    "CONFIDENCE_WEIGHT": 0.3,
-    "ACTION_EXPLORATION_NOISE": 0.4,  
-    "INITIAL_EXPLORATION_RATE": 1.0,
-    "EXPLORATION_DECAY_RATE": 0.995,  
-    "ENTROPY_COEFFICIENT": 0.02,     
-    "MOVE_STEP_MIN": 0,            
-    "MOVE_STEP_MAX": 1,             
-    "TURN_ANGLE_MIN": 10.0,           
-    "TURN_ANGLE_MAX": 50.0,
-      "EARLY_STOP_PATIENCE": 50,
-  "CONVERGENCE_WINDOW_SIZE": 20,
-  "MIN_LEARNING_RATE": 1e-6,
-  "REDUCE_LR_ON_PLATEAU": true
+    "LEARNING_RATE": 0.0001,  
+    "GAMMA": 0.98,            
+    "K_EPOCHS": 8,            
+    "EPS_CLIP": 0.1,          
+    "SEQUENCE_LENGTH": 15,    
+    "HIDDEN_SIZE": 256,    
+    "ENTROPY_COEFFICIENT": 0.05,  
     
-  }
+ 
+    "INITIAL_EXPLORATION_RATE": 1.0, 
+    "MIN_EXPLORATION_RATE": 0.05,
+    "EXPLORATION_DECAY_RATE": 0.995,
+    "ACTION_EXPLORATION_NOISE": 0.8,
+    
+   
+    "EPISODES": 2000,       
+    "MAX_STEPS_PER_EPISODE": 50,
+    "ENV_MAX_STEPS": 50,
+    
+ 
+    "MOVE_STEP_MIN": 0.2,
+    "MOVE_STEP_MAX": 1.0,
+    "TURN_ANGLE_MIN": 15.0,
+    "TURN_ANGLE_MAX": 45.0,
+    
+  
+    "MODEL_PATH": "./model/gate_finder_ppo_enhanced.pth",
+    "TARGET_DESCRIPTION": "gate",
+    
+
+    "IMAGE_HEIGHT": 480,
+    "IMAGE_WIDTH": 640,
+    "DETECTION_CONFIDENCE": 0.4,
+    
+ 
+    "MIN_GATE_AREA": 50,
+    "CENTER_THRESHOLD": 150,
+    "POSITION_HISTORY_LENGTH": 15,
+    "EARLY_STOP_PATIENCE": 200,
+    "GRADIENT_CLIP_NORM": 0.5
 }

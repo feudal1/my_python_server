@@ -239,9 +239,10 @@ def get_deterministic_action(ppo_agent, state):
     return move_action, turn_action, move_forward_step, turn_angle
 
 
+# 在 perform_training_loop 函数中添加状态多样性监控
 def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
     """
-    执行训练循环
+    执行训练循环 - 增加状态多样性监控
     """
     scores = deque(maxlen=50)
     total_rewards = deque(maxlen=50)
@@ -252,18 +253,20 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
         'episode_count': 0,
         'successful_episodes': 0,
         'average_reward_history': [],
-        'action_distribution': {'forward': 0, 'backward': 0, 'strafe_left': 0, 'strafe_right': 0, 
-                               'turn_left': 0, 'turn_right': 0},
-        'action_count': 0,
-        'training_update_count': 0
+        'action_diversity': [],  # 新增：动作多样性
+        'state_diversity': [],   # 新增：状态多样性
+        'entropy_history': []    # 新增：策略熵
     }
     
     print(f"开始训练循环，从第 {start_episode} 轮到第 {total_episodes} 轮")
     loop_start_time = time.time()
     
     for episode in range(start_episode, total_episodes):
-        # 每隔一定轮次打印调试信息
-        print_debug = True # 每10轮打印一次调试信息
+        # 记录episode开始时的状态
+        episode_states = []
+        episode_actions = []
+        
+        print_debug = (episode % 50 == 0)  # 每50轮打印一次详细信息
         result = run_episode(env, ppo_agent, episode, total_episodes, training_mode=True, print_debug=print_debug)
         
         # 更新统计数据
@@ -275,24 +278,18 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
         if result['success_flag']:
             training_stats['successful_episodes'] += 1
         
-        # 更新动作分布统计
-        if 'move_action' in locals():
-            move_names = ["forward", "backward", "strafe_left", "strafe_right"]
-            turn_names = ["turn_left", "turn_right"]
-            # 注意：这里需要从run_episode中获取实际执行的动作
-            # 由于当前实现无法直接访问，暂时跳过动作分布统计
-        
         # 使用收敛监控
         convergence_info = ppo_agent.check_convergence_status(
             result['total_reward'], result['step_count'], result['success_flag'])
         
-        # 每10轮打印一次收敛报告
-        if episode % 10 == 0:
+        # 每25轮打印一次收敛报告
+        if episode % 25 == 0:
             current_time = time.time()
             elapsed_time = current_time - loop_start_time
             
             avg_reward = np.mean(total_rewards) if total_rewards else 0
             success_rate = training_stats['successful_episodes'] / training_stats['episode_count'] if training_stats['episode_count'] > 0 else 0
+            
             print(f"Episode {episode}: 平均奖励: {avg_reward:.3f}, "
                   f"成功率: {success_rate:.3f}, "
                   f"总奖励: {result['total_reward']:.3f}, "
@@ -309,7 +306,6 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
             break
     
     return training_stats
-
 
 def continue_training_gru_ppo_agent(model_path=None):
     """
