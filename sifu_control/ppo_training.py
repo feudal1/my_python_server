@@ -49,39 +49,26 @@ def find_latest_checkpoint(model_path):
     return None
 
 
-def create_slam_enhanced_environment_and_agent():
+def create_environment_and_agent():
     """
-    创建集成SLAM的环境和智能体
+    创建环境和智能体
     """
-    from ppo_agents import SLAMEnhancedTargetSearchEnvironment
-    from ppo_agents import SLAMEnhancedGRUPPOAgent
+    from ppo_agents import EnhancedTargetSearchEnvironment
+    from ppo_agents import EnhancedGRUPPOAgent
     from ppo_agents import GRUMemory
     
-    if CONFIG.get('SLAM_ENABLED', False):
-        env = SLAMEnhancedTargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
-    else:
-        from ppo_agents import EnhancedTargetSearchEnvironment
-        env = EnhancedTargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
-        
+    env = EnhancedTargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
     move_action_dim = 4  # forward, backward, strafe_left, strafe_right
     turn_action_dim = 2  # turn_left, turn_right
     
-    if CONFIG.get('SLAM_ENABLED', False):
-        ppo_agent = SLAMEnhancedGRUPPOAgent(
-            (3, 480, 640), 
-            move_action_dim,
-            turn_action_dim
-        )
-    else:
-        # 修改这里：使用现有的类而不是EnhancedGRUPPOAgent
-        from ppo_agents import GRUPPOAgent  # 假设这是原来的非SLAM增强版本
-        ppo_agent = GRUPPOAgent(
-            (3, 480, 640), 
-            move_action_dim,
-            turn_action_dim
-        )
+    ppo_agent = EnhancedGRUPPOAgent(
+        (3, 480, 640), 
+        move_action_dim,
+        turn_action_dim
+    )
     
     return env, ppo_agent
+
 
 def load_model(ppo_agent, model_path):
     """
@@ -101,7 +88,7 @@ def initialize_model(model_path, load_existing=True):
     """
     初始化模型，包括加载已存在的模型或创建新模型
     """
-    env, ppo_agent = create_slam_enhanced_environment_and_agent()
+    env, ppo_agent = create_environment_and_agent()
     
     start_episode = 0
     
@@ -136,8 +123,6 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
     from ppo_agents import GRUMemory
     episode_memory = GRUMemory(sequence_length=CONFIG['SEQUENCE_LENGTH'])
     ppo_agent.state_history.clear()
-    if hasattr(ppo_agent, 'slam_feature_history'):
-        ppo_agent.slam_feature_history.clear()
     
     # 定义动作名称映射
     move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
@@ -150,12 +135,8 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
         if training_mode:
             # 训练模式：使用act方法
             if print_debug:
-                if hasattr(env, 'slam_features'):
-                    move_action, turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.act(
-                        state, episode_memory, slam_feature=env.slam_features, return_debug_info=True)
-                else:
-                    move_action, turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.act(
-                        state, episode_memory, return_debug_info=True)
+                move_action, turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.act(
+                    state, episode_memory, return_debug_info=True)
                 
                 # 打印调试信息
                 if 'move_probs' in debug_info:
@@ -163,12 +144,8 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
                     print(f"turn_probs shape: {debug_info['turn_probs'].shape}")
                     print(f"move_action: {move_action}, turn_action: {turn_action}")
             else:
-                if hasattr(env, 'slam_features'):
-                    move_action, turn_action, move_forward_step, turn_angle = ppo_agent.act(
-                        state, episode_memory, slam_feature=env.slam_features)
-                else:
-                    move_action, turn_action, move_forward_step, turn_angle = ppo_agent.act(
-                        state, episode_memory)
+                move_action, turn_action, move_forward_step, turn_angle = ppo_agent.act(
+                    state, episode_memory)
         else:
             # 评估模式：使用确定性动作
             move_action, turn_action, move_forward_step, turn_angle = get_deterministic_action(ppo_agent, state)
@@ -217,7 +194,6 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
         'detection_results': detection_results
     }
 
-
 def get_deterministic_action(ppo_agent, state):
     """
     在评估模式下获取确定性动作
@@ -263,6 +239,7 @@ def get_deterministic_action(ppo_agent, state):
     return move_action, turn_action, move_forward_step, turn_angle
 
 
+# 在 perform_training_loop 函数中添加状态多样性监控
 def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
     """
     执行训练循环 - 增加状态多样性监控和检查点保存
@@ -312,7 +289,7 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
             print(f"检查点已保存: {checkpoint_path}")
         
         # 每25轮打印一次收敛报告
-        if episode % 10 == 0:
+        if episode %10 == 0:
             current_time = time.time()
             elapsed_time = current_time - loop_start_time
             
@@ -335,8 +312,6 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
             break
     
     return training_stats
-
-
 def continue_training_gru_ppo_agent(model_path=None):
     """
     基于现有GRU模型继续训练 - 使用全局配置，带收敛监控
@@ -437,7 +412,7 @@ def evaluate_trained_gru_ppo_agent(model_path=None):
     start_time = time.time()
     
     # 创建环境和智能体
-    env, ppo_agent = create_slam_enhanced_environment_and_agent()
+    env, ppo_agent = create_environment_and_agent()
     
     # 加载训练好的模型
     if not load_model(ppo_agent, model_path):
@@ -456,7 +431,7 @@ def evaluate_trained_gru_ppo_agent(model_path=None):
     
     for episode in range(evaluation_episodes):
         # 每隔几轮打印一次调试信息
-        print_debug = True  # 每2轮打印一次调试信息
+        print_debug =True  # 每2轮打印一次调试信息
         result = run_episode(env, ppo_agent, episode, evaluation_episodes, training_mode=False, print_debug=print_debug)
         
         scores.append(result['step_count'])
