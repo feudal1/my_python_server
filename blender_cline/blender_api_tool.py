@@ -130,14 +130,29 @@ open_pmx_file_selector()
 
 
 def delete_all_objects():
-    """删除所有对象"""
+    """删除所有对象和集合"""
     code = '''
 import bpy
+
 # 选择所有对象
 bpy.ops.object.select_all(action='SELECT')
 # 删除选中的对象
 bpy.ops.object.delete()
-"所有物体已删除"
+
+# 删除所有集合（除了默认的Master Collection）
+# 删除场景中的所有集合
+for collection in bpy.data.collections:
+    bpy.data.collections.remove(collection)
+
+# 删除所有空的集合（如果还有残留的话）
+collections_to_remove = []
+for collection in bpy.data.collections:
+    collections_to_remove.append(collection)
+    
+for collection in collections_to_remove:
+    bpy.data.collections.remove(collection)
+
+print("所有对象和集合已删除")
 '''
     return call_blender_api('/api/exec', code)
 def parent_object_to_armature():

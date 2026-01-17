@@ -66,6 +66,124 @@ def setup_logging():
     return logger
 
 
+class SLAMSystem:
+    """
+    SLAM系统 - 用于构建环境地图和估计位姿
+    """
+    def __init__(self):
+        self.keyframes = []
+        self.poses = []
+        self.map_points = []
+        self.current_pose = np.eye(4)
+        self.orb_detector = cv2.ORB_create(nfeatures=500)
+        self.bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        self.min_matches = 10
+        self.pose_history = deque(maxlen=100)
+        self.logger = setup_logging()
+
+    def extract_features(self, frame):
+        """提取ORB特征"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        keypoints, descriptors = self.orb_detector.detectAndCompute(gray, None)
+        return keypoints, descriptors
+
+    def estimate_pose(self, frame, camera_matrix):
+        """估计当前帧相对于上一帧的位姿"""
+        current_kp, current_desc = self.extract_features(frame)
+        
+        if current_desc is None:
+            return self.current_pose.copy()
+        
+        if len(self.keyframes) == 0:
+            # 第一帧
+            self.keyframes.append({
+                'frame': frame,
+                'keypoints': current_kp,
+                'descriptors': current_desc,
+                'pose': self.current_pose.copy()
+            })
+            self.poses.append(self.current_pose.copy())
+            self.pose_history.append(self.current_pose.copy())
+            return self.current_pose.copy()
+        
+        # 匹配当前帧与最新关键帧
+        last_frame_info = self.keyframes[-1]
+        last_desc = last_frame_info['descriptors']
+        
+        try:
+            matches = self.bf_matcher.match(current_desc, last_desc)
+            
+            if len(matches) < self.min_matches:
+                # 如果匹配点不足，返回上一帧的位姿
+                return self.current_pose.copy()
+            
+            # 提取匹配点坐标
+            src_pts = np.float32([current_kp[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([last_frame_info['keypoints'][m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+            
+            # 计算本质矩阵
+            E, mask = cv2.findEssentialMat(src_pts, dst_pts, camera_matrix)
+            
+            if E is not None:
+                # 恢复旋转和平移
+                _, R, t, _ = cv2.recoverPose(E, src_pts, dst_pts, camera_matrix)
+                
+                # 构建变换矩阵
+                T = np.eye(4)
+                T[:3, :3] = R
+                T[:3, 3] = t.flatten()
+                
+                # 更新当前位姿
+                self.current_pose = self.current_pose @ np.linalg.inv(T)
+        
+        except Exception as e:
+            self.logger.warning(f"SLAM位姿估计失败: {e}")
+            return self.current_pose.copy()
+        
+        # 更新姿态历史
+        self.pose_history.append(self.current_pose.copy())
+        return self.current_pose.copy()
+
+    def get_current_pose(self):
+        """获取当前位姿"""
+        return self.current_pose.copy()
+
+    def get_slam_features(self):
+        """获取SLAM相关的特征向量"""
+        if len(self.pose_history) < 2:
+            return np.zeros(12)  # 3 pos + 3 rot + 6 additional
+        
+        # 获取最近的位姿信息
+        recent_pose = self.pose_history[-1]
+        pos = recent_pose[:3, 3]  # 位置
+        rot = self.rotation_matrix_to_euler(recent_pose[:3, :3])  # 旋转
+        
+        # 计算位姿变化
+        prev_pose = self.pose_history[-2]
+        pos_change = recent_pose[:3, 3] - prev_pose[:3, 3]
+        rot_change = self.rotation_matrix_to_euler(
+            np.dot(prev_pose[:3, :3].T, recent_pose[:3, :3])
+        )
+        
+        # 组合成特征向量
+        features = np.concatenate([pos, rot, pos_change, rot_change])
+        return features
+
+    def rotation_matrix_to_euler(self, R):
+        """将旋转矩阵转换为欧拉角"""
+        sy = np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+        singular = sy < 1e-6
+        
+        if not singular:
+            x = np.arctan2(R[2, 1], R[2, 2])
+            y = np.arctan2(-R[2, 0], sy)
+            z = np.arctan2(R[1, 0], R[0, 0])
+        else:
+            x = np.arctan2(-R[1, 2], R[1, 1])
+            y = np.arctan2(-R[2, 0], sy)
+            z = 0
+        
+        return np.array([x, y, z])
 
 
 class ResidualBlock(nn.Module):
@@ -109,7 +227,6 @@ class ResidualBlock(nn.Module):
         return out
 
 
-# 在 ppo_agents.py 中修改 ResNetFeatureExtractor
 class ResNetFeatureExtractor(nn.Module):
     """
     增强版ResNet特征提取器 - 提高区分能力
@@ -165,30 +282,44 @@ class ResNetFeatureExtractor(nn.Module):
         x = self.fc_features(x)  # 映射到更高维特征空间
         return x
 
-class EnhancedGRUPolicyNetwork(nn.Module):
+
+class SLAMEnhancedGRUPolicyNetwork(nn.Module):
     """
-    增强版带有GRU的策略网络 - 更强的表达能力
+    集成SLAM信息的增强策略网络
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256):  # 增加隐藏层大小
-        super(EnhancedGRUPolicyNetwork, self).__init__()
+    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256):
+        super(SLAMEnhancedGRUPolicyNetwork, self).__init__()
         
+        # 原有的视觉特征提取器
         self.feature_extractor = ResNetFeatureExtractor(3)
-        feature_size = 512  # 根据上面的修改调整
+        feature_size = 512
         
-        # 增加GRU复杂度
+        # SLAM特征提取器
+        self.slam_feature_extractor = nn.Sequential(
+            nn.Linear(12, 64),  # 位姿信息 (3 pos + 3 rot + 6 additional)
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 256)
+        )
+        
+        # 合并视觉和SLAM特征
+        combined_feature_size = feature_size + 256  # 视觉特征 + SLAM特征
+        
+        # 增强的GRU
         self.gru = nn.GRU(
-            feature_size, 
+            combined_feature_size, 
             hidden_size, 
-            num_layers=3,  # 增加层数
-            batch_first=True, 
-            dropout=0.2,  # 增加dropout
+            num_layers=3,
+            batch_first=True,
+            dropout=0.2,
             bidirectional=True
         )
         self.gru_output = nn.Linear(hidden_size * 2, hidden_size)
         
         # Actor heads - 增加复杂度
         self.move_actor = nn.Sequential(
-            nn.Linear(hidden_size, 512),  # 增加维度
+            nn.Linear(hidden_size, 512),
             nn.LayerNorm(512),
             nn.ReLU(),
             nn.Dropout(0.4),
@@ -274,32 +405,36 @@ class EnhancedGRUPolicyNetwork(nn.Module):
                     n = param.size(0)
                     param.data[:n//4].fill_(1.0)
 
-    def forward(self, states, hidden_state=None, return_debug_info=False):
+    def forward(self, states, slam_data=None, hidden_state=None, return_debug_info=False):
         batch_size = states.size(0)
         seq_len = states.size(1)
         
-        # Flatten the states for feature extraction
+        # 提取视觉特征
         states_flat = states.view(-1, *states.shape[2:])
-        features = self.feature_extractor(states_flat)
+        visual_features = self.feature_extractor(states_flat)
+        visual_features = visual_features.view(batch_size, seq_len, -1)
         
-        # Reshape back to (batch, seq, feature)
-        features = features.view(batch_size, seq_len, -1)
+        # 提取SLAM特征
+        if slam_data is not None:
+            slam_features = self.slam_feature_extractor(slam_data)
+        else:
+            # 如果没有SLAM数据，使用零向量
+            slam_features = torch.zeros(batch_size, seq_len, 256, device=states.device)
         
-        # Pass through GRU
-        gru_out, hidden = self.gru(features, hidden_state)
+        # 合并视觉和SLAM特征
+        combined_features = torch.cat([visual_features, slam_features], dim=-1)
+        
+        # 通过GRU
+        gru_out, hidden = self.gru(combined_features, hidden_state)
         gru_out = self.gru_output(gru_out)
         
-        # Use the last output from GRU
+        # 使用最后一个输出
         last_output = gru_out[:, -1, :]
         
-        # Actor outputs
+        # Actor和Critic输出
         move_logits = self.move_actor(last_output)
         turn_logits = self.turn_actor(last_output)
-        
-        # Action parameters
         action_params = torch.tanh(self.action_param_head(last_output))
-        
-        # Critic output
         value = self.critic(last_output)
         
         if return_debug_info:
@@ -310,7 +445,7 @@ class EnhancedGRUPolicyNetwork(nn.Module):
                 'action_params': action_params.detach().cpu().numpy(),
                 'value': value.detach().cpu().numpy(),
                 'last_output_shape': last_output.shape,
-                'features_shape': features.shape
+                'combined_features_shape': combined_features.shape
             }
             
             # 打印模型输出信息
@@ -320,8 +455,8 @@ class EnhancedGRUPolicyNetwork(nn.Module):
             self.logger.info(f"参数: {[round(float(x), 2) for x in debug_info['action_params'][0]]}")
             self.logger.info(f"价值: {round(float(debug_info['value'][0][0]), 2)}")
             
-            if features.size(0) > 1:  # 如果批次大小大于1，才能比较特征差异
-                feature_diff = torch.mean(torch.abs(features[0] - features[1])).item()
+            if combined_features.size(0) > 1:  # 如果批次大小大于1，才能比较特征差异
+                feature_diff = torch.mean(torch.abs(combined_features[0] - combined_features[1])).item()
                 self.logger.info(f"特征差异: {feature_diff:.4f}")
             
             return (
@@ -341,6 +476,7 @@ class EnhancedGRUPolicyNetwork(nn.Module):
                 hidden
             )
 
+
 class GRUMemory:
     """
     GRU智能体的记忆存储类
@@ -348,6 +484,7 @@ class GRUMemory:
     def __init__(self, sequence_length=20):
         self.sequence_length = sequence_length
         self.states = deque(maxlen=sequence_length)
+        self.slam_features = deque(maxlen=sequence_length)  # 新增SLAM特征存储
         self.move_actions = deque(maxlen=sequence_length)
         self.turn_actions = deque(maxlen=sequence_length)
         self.logprobs = deque(maxlen=sequence_length)
@@ -357,6 +494,7 @@ class GRUMemory:
 
     def clear_memory(self):
         self.states.clear()
+        self.slam_features.clear()
         self.move_actions.clear()
         self.turn_actions.clear()
         self.logprobs.clear()
@@ -364,7 +502,7 @@ class GRUMemory:
         self.is_terminals.clear()
         self.action_params.clear()
 
-    def append(self, state, move_action, turn_action, logprob, reward, is_terminal, action_param=None):
+    def append(self, state, move_action, turn_action, logprob, reward, is_terminal, action_param=None, slam_feature=None):
         self.states.append(state)
         self.move_actions.append(move_action)
         self.turn_actions.append(turn_action)
@@ -373,6 +511,8 @@ class GRUMemory:
         self.is_terminals.append(is_terminal)
         if action_param is not None:
             self.action_params.append(action_param)
+        if slam_feature is not None:
+            self.slam_features.append(slam_feature)
 
 
 class EnhancedStuckDetector:
@@ -429,6 +569,7 @@ class EnhancedStuckDetector:
         return sum(1 for x in self.movement_history if x == 0) / len(self.movement_history)
 
 
+# 原始的增强版目标搜索环境（保持向后兼容）
 class EnhancedTargetSearchEnvironment:
     """
     增强版目标搜索环境 - 使用全局配置，加强卡死检测
@@ -1054,6 +1195,67 @@ class EnhancedTargetSearchEnvironment:
         new_area = self._get_max_detection_area(detection_results) if detection_results else 0
         
         return total_reward, new_area
+    def _save_detection_image_with_bounding_boxes(self, image, detection_results, prefix="detection"):
+        """
+        保存带检测框的图像
+        """
+        try:
+            # 复制图像以避免修改原始图像
+            img_with_boxes = image.copy()
+            
+            # 绘制检测框
+            for detection in detection_results:
+                bbox = detection['bbox']
+                label = detection['label']
+                score = detection['score']
+                
+                # 转换边界框坐标为整数
+                x1, y1, x2, y2 = map(int, bbox)
+                
+                # 绘制矩形框
+                color = (0, 255, 0)  # 绿色框
+                thickness = 2
+                cv2.rectangle(img_with_boxes, (x1, y1), (x2, y2), color, thickness)
+                
+                # 添加标签和置信度文本
+                text = f"{label}: {score:.2f}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                text_color = (255, 255, 255)  # 白色文字
+                text_thickness = 1
+                
+                # 获取文本框的尺寸
+                (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, text_thickness)
+                
+                # 绘制文本背景
+                cv2.rectangle(img_with_boxes, (x1, y1 - text_height - 10), 
+                            (x1 + text_width, y1), color, -1)
+                
+                # 在图像上绘制文本
+                cv2.putText(img_with_boxes, text, (x1, y1 - 5), font, 
+                        font_scale, text_color, text_thickness)
+            
+            # 生成文件名
+            timestamp = int(time.time() * 1000)  # 使用毫秒时间戳
+            filename = f"{prefix}_detection_{timestamp}.png"
+            
+            # 确定保存路径
+            save_dir = Path(__file__).parent / "detection_images"
+            if not save_dir.exists():
+                save_dir.mkdir(parents=True, exist_ok=True)
+            
+            filepath = save_dir / filename
+            
+            # 保存图像
+            success = cv2.imwrite(str(filepath), img_with_boxes)
+            
+            if success:
+                self.logger.info(f"检测结果图像已保存: {filepath}")
+            else:
+                self.logger.error(f"保存检测结果图像失败: {filepath}")
+                
+        except Exception as e:
+            self.logger.error(f"保存带检测框图像时出错: {e}")
     def reset(self):
         """
         重置环境
@@ -1074,10 +1276,770 @@ class EnhancedTargetSearchEnvironment:
         return initial_state
 
 
-# 在 EnhancedGRUPPOAgent 类的 __init__ 方法中添加：
-class EnhancedGRUPPOAgent:
+class SLAMEnhancedTargetSearchEnvironment:
     """
-    增强版基于GRU的PPO智能体 - 增加收敛监控，改进卡死检测
+    集成SLAM的增强版目标搜索环境
+    """
+    def __init__(self, target_description=None):
+        # 如果没有传入target_description，使用默认配置
+        if target_description is None:
+            target_description = CONFIG['TARGET_DESCRIPTION']
+        
+        from control_api_tool import ImprovedMovementController
+        self.controller = ImprovedMovementController()
+        self.target_description = target_description
+        self.step_count = 0
+        self.max_steps = CONFIG['ENV_MAX_STEPS']  # 统一使用ENV_MAX_STEPS
+        self.last_detection_result = None
+        self.last_center_distance = float('inf')
+        self.last_area = 0
+        self.logger = setup_logging()  # 使用统一的日志配置
+        
+        # 记录探索历史
+        self.position_history = []
+        self.max_history_length = CONFIG['POSITION_HISTORY_LENGTH']
+        self.yolo_model = self._load_yolo_model()
+        self._warm_up_detection_model()
+        
+        # 成功条件阈值
+        self.MIN_GATE_AREA = CONFIG['MIN_GATE_AREA']
+        self.CENTER_THRESHOLD = CONFIG['CENTER_THRESHOLD']
+        
+        # 新增：物理状态追踪
+        self.previous_frame = None
+        self.action_history = deque(maxlen=10)  # 记录最近10个动作
+        self.visual_change_history = deque(maxlen=10)  # 记录最近10帧的视觉变化
+        self.action_effectiveness = defaultdict(lambda: deque(maxlen=5))  # 动作有效性统计
+        self.stuck_detector = EnhancedStuckDetector(window_size=5)  # 增强卡死检测器
+        self.frame_change_threshold = 0.05  # 视觉变化阈值
+        self.no_progress_steps = 0  # 连续无进展步数
+        self.total_no_progress_steps = 0  # 总无进展步数
+        self.state_difficulty_tracker = {
+            'recent_states': deque(maxlen=10),
+            'state_variance': 0.0,
+            'state_diversity_score': 0.0
+        }
+        
+        # SLAM相关组件
+        self.slam_system = SLAMSystem()
+        self.camera_matrix = self._get_camera_intrinsics()
+        self.slam_enabled = CONFIG.get('SLAM_ENABLED', True)
+        self.slam_features = np.zeros(12)
+
+    def _get_camera_intrinsics(self):
+        """获取相机内参矩阵"""
+        # 根据游戏分辨率设置虚拟相机参数
+        fx = CONFIG.get('CAMERA_FX', 640.0)
+        fy = CONFIG.get('CAMERA_FY', 480.0)
+        cx = CONFIG.get('IMAGE_WIDTH', 640) / 2.0
+        cy = CONFIG.get('IMAGE_HEIGHT', 480) / 2.0
+        
+        K = np.array([
+            [fx, 0, cx],
+            [0, fy, cy],
+            [0, 0, 1]
+        ])
+        return K
+
+    def capture_screen(self):
+        """
+        截取当前屏幕画面，并计算状态多样性
+        """
+        try:
+            project_root = Path(__file__).parent.parent
+            sys.path.insert(0, str(project_root))
+            from computer_server.prtsc import capture_window_by_title
+            result = capture_window_by_title("sifu", "sifu_window_capture.png")
+            if result:
+                screenshot = Image.open("sifu_window_capture.png")
+                screenshot = np.array(screenshot)
+                screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+            else:
+                self.logger.warning("未找到包含 'sifu' 的窗口，使用全屏截图")
+                screenshot = pyautogui.screenshot()
+                screenshot = np.array(screenshot)
+                screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+            
+            # 如果启用SLAM，更新SLAM系统
+            if self.slam_enabled:
+                try:
+                    self.slam_features = self.slam_system.estimate_pose(screenshot, self.camera_matrix)
+                except Exception as e:
+                    self.logger.warning(f"SLAM更新失败: {e}")
+            
+            # 计算图像差异性
+            gray = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            # 存储最近的状态用于多样性计算
+            if len(self.state_difficulty_tracker['recent_states']) > 0:
+                # 计算与之前状态的差异
+                prev_state = self.state_difficulty_tracker['recent_states'][-1]
+                state_diff = np.mean(np.abs(screenshot.astype(np.float32) - prev_state.astype(np.float32)))
+                self.state_difficulty_tracker['state_variance'] = state_diff
+            
+            self.state_difficulty_tracker['recent_states'].append(screenshot.copy())
+            
+            return screenshot
+        except ImportError:
+            self.logger.warning("截图功能不可用，使用模拟图片")
+            return np.zeros((CONFIG['IMAGE_HEIGHT'], CONFIG['IMAGE_WIDTH'], 3), dtype=np.uint8)
+
+    def _extract_position_feature(self, frame, detections):
+        """提取位置特征用于重复检测"""
+        if frame is None:
+            return (0, 0, 0)  # 默认特征
+        
+        # 提取图像哈希值和检测结果统计
+        img_hash = hash(frame.tostring())
+        detection_count = len(detections) if detections else 0
+        total_area = sum(det['width'] * det['height'] for det in detections) if detections else 0
+        
+        return (img_hash, detection_count, total_area)
+
+    def _calculate_visual_change_reward(self, action_taken):
+        """
+        基于视觉变化的奖励 - 检查动作是否产生了预期的视觉反馈
+        """
+        if self.previous_frame is None:
+            return 0.0
+            
+        current_frame = self.capture_screen()
+        if current_frame is None:
+            return 0.0
+            
+        # 计算帧间差异
+        frame_diff = self._calculate_frame_difference(self.previous_frame, current_frame)
+        self.visual_change_history.append(frame_diff)
+        
+        if not action_taken:
+            return 0.0
+            
+        move_action, turn_action = action_taken
+        move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
+        turn_action_names = ["turn_left", "turn_right"]
+        
+        # 预期的视觉变化量
+        expected_change = self._get_expected_change_for_action(move_action, turn_action)
+        
+        # 如果视觉变化小于预期且大于阈值，给予奖励；否则给予惩罚
+        if frame_diff > expected_change * 0.3:  # 有足够变化
+            # 根据变化量给予适度奖励
+            change_reward = min(frame_diff * 0.8, 0.15)  # 增加奖励幅度
+            self.stuck_detector.record_movement()
+            return change_reward
+        else:
+            # 视觉变化不足，可能卡死了
+            self.stuck_detector.record_stuck()
+            return -0.15  # 增加惩罚力度
+
+    def _get_expected_change_for_action(self, move_action, turn_action):
+        """
+        根据执行的动作返回预期的视觉变化量
+        """
+        expected = 0.0
+        
+        # 移动动作通常产生较大的透视变化
+        if move_action in [0, 1]:  # forward/backward
+            expected += 0.25
+        elif move_action in [2, 3]:  # strafe left/right
+            expected += 0.20
+            
+        # 转头动作产生视角变化
+        if turn_action in [0, 1]:  # turn left/right
+            expected += 0.15
+            
+        return expected
+
+    def _calculate_action_consistency_reward(self, action_taken):
+        """
+        奖励动作与视觉变化的一致性
+        """
+        if not action_taken or len(self.visual_change_history) < 2:
+            return 0.0
+            
+        move_action, turn_action = action_taken
+        recent_changes = list(self.visual_change_history)[-3:]  # 最近3次变化
+        
+        avg_change = np.mean(recent_changes) if recent_changes else 0.0
+        
+        # 如果执行了移动动作但视觉变化很小，说明可能无效
+        if move_action in [0, 1, 2, 3] and avg_change < 0.03:
+            return -0.05  # 移动无效惩罚
+        elif turn_action in [0, 1] and avg_change < 0.015:
+            return -0.04  # 转头无效惩罚
+        elif avg_change > 0.12:  # 显著变化奖励
+            return 0.03
+            
+        return 0.0
+
+    def _calculate_stuck_penalty(self):
+        """
+        强化的卡死惩罚
+        """
+        if self.stuck_detector.is_stuck():
+            self.total_no_progress_steps += 1
+            # 根据连续卡死次数增加惩罚
+            consecutive_stuck = min(self.total_no_progress_steps / 8, 2.0)
+            base_penalty = CONFIG.get('STUCK_PENALTY', -0.25)  # 提高基础惩罚
+            return base_penalty * consecutive_stuck
+        return 0.0
+
+    def _calculate_exploration_bonus(self):
+        """
+        基于SLAM地图的新区域探索奖励
+        """
+        if not self.slam_enabled or len(self.slam_system.pose_history) < 2:
+            return 0.0
+        
+        current_pose = self.slam_system.pose_history[-1]
+        previous_poses = list(self.slam_system.pose_history)[:-1]
+        
+        # 检查当前位置是否接近之前的访问点
+        min_distance = float('inf')
+        for prev_pose in previous_poses:
+            # 计算位置距离（只考虑平移部分）
+            dist = np.linalg.norm(current_pose[:3, 3] - prev_pose[:3, 3])
+            min_distance = min(min_distance, dist)
+        
+        # 如果距离之前的访问点较远，给予探索奖励
+        exploration_threshold = CONFIG.get('EXPLORATION_THRESHOLD', 10.0)
+        if min_distance > exploration_threshold:
+            return 0.1  # 探索新区域奖励
+        else:
+            return -0.05  # 重复访问惩罚
+
+    def _calculate_exploration_reward(self):
+        """
+        基于探索行为的奖励
+        """
+        exploration_bonus = self._calculate_exploration_bonus()
+        
+        if len(self.visual_change_history) < 5:
+            return exploration_bonus
+            
+        # 计算视觉变化的标准差，高变化表示探索行为
+        changes = list(self.visual_change_history)
+        variation = np.std(changes)
+        
+        if variation > 0.06:  # 高变化性奖励
+            return exploration_bonus + 0.03
+        elif variation < 0.008:  # 低变化性惩罚
+            return exploration_bonus - 0.02
+            
+        return exploration_bonus
+
+    def _calculate_repetition_penalty(self, action_taken):
+        """
+        强化的重复动作惩罚
+        """
+        if not action_taken or len(self.action_history) < 4:  # 增加历史长度
+            return 0.0
+        
+        recent_actions = list(self.action_history)[-4:]  # 检查更多历史
+        same_action_count = sum(1 for act in recent_actions if act == action_taken)
+        
+        if same_action_count >= 3:  # 连续3次相同动作
+            return -0.35  # 大幅提高惩罚
+        elif same_action_count >= 2:  # 连续2次相同动作
+            return -0.2  # 提高惩罚
+            
+        return 0.0
+
+    def _calculate_progress_reward(self, detection_results):
+        """
+        长期进展奖励 - 基于目标检测的总体趋势
+        """
+        if not detection_results:
+            self.no_progress_steps += 1
+            return -0.02
+        else:
+            # 如果检测到目标，减少无进展计数
+            self.no_progress_steps = max(0, self.no_progress_steps - 1)
+            return 0.02
+
+    def _calculate_target_presence_reward(self, detection_results):
+        """
+        最小化的存在奖励 - 仅当检测到目标时给予小奖励
+        """
+        if detection_results:
+            # 检测到gate给予稍高奖励
+            gate_detected = any(
+                'gate' in detection['label'].lower() or detection['label'].lower() == 'gate'
+                for detection in detection_results
+            )
+            if gate_detected:
+                return 0.08
+            else:
+                return 0.02  # 检测到其他目标的小奖励
+        return -0.02  # 未检测到任何目标的轻微惩罚
+
+    def _calculate_frame_difference(self, frame1, frame2):
+        """
+        计算两帧之间的差异程度
+        """
+        # 转换为灰度图
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        
+        # 计算绝对差值
+        diff = cv2.absdiff(gray1, gray2)
+        
+        # 计算平均差异值
+        mean_diff = np.mean(diff) / 255.0  # 归一化到[0,1]
+        
+        return mean_diff
+
+    def _get_max_detection_area(self, detection_results):
+        """
+        获取检测结果中的最大面积
+        """
+        if not detection_results:
+            return 0
+        return max([det['width'] * det['height'] for det in detection_results])
+
+    def reset_to_origin(self):
+        """
+        重置到原点操作
+        """
+        self.logger.info("执行重置到原点操作")
+        self.logger.info( "执行重置到原点操作...")
+        
+        # 按键操作序列
+        pyautogui.press('esc')
+        time.sleep(0.2)
+        pyautogui.press('q')
+        time.sleep(0.2)
+        pyautogui.press('enter')
+        time.sleep(0.2)
+        pyautogui.press('enter')
+        time.sleep(0.2)
+        
+        # 检测门是否存在
+        gate_detected = False
+        while not gate_detected:
+            new_state = self.capture_screen()
+            detection_results = self.detect_target(new_state)
+            
+            for detection in detection_results:
+                if detection['label'].lower() == 'gate' or 'gate' in detection['label'].lower():
+                    gate_detected = True
+                    time.sleep(0.2)
+                    pyautogui.press('enter')
+                    time.sleep(0.3)
+                    pyautogui.press('enter')
+                    break
+            
+            if not gate_detected:
+                self.logger.info( f"未检测到门，等待1秒后按回车重新检测...")
+                time.sleep(1)
+                pyautogui.press('enter')
+                time.sleep(0.2)
+               
+        # 最后再按一次回车
+        pyautogui.press('enter')
+        time.sleep(0.2)
+        pyautogui.press('enter')
+        time.sleep(0.2)
+            # 重置环境内部状态
+        self.step_count = 0
+        self.last_center_distance = float('inf')
+        self.last_area = 0
+        self.last_detection_result = None
+        self.position_history = []
+        self.action_history.clear()
+        self.visual_change_history.clear()
+        self.no_progress_steps = 0
+        self.total_no_progress_steps = 0
+        self.previous_frame = None
+        self.stuck_detector = EnhancedStuckDetector(window_size=5)
+        self.slam_system = SLAMSystem()  # 重置SLAM系统
+        self.logger.info( "重置到原点操作完成")
+        self.logger.info("重置到原点操作完成")
+
+    def _load_yolo_model(self):
+        """
+        加载YOLO模型
+        """
+        current_dir = Path(__file__).parent
+        model_path = current_dir.parent / "models" / "find_gate.pt"
+        
+        if not model_path.exists():
+            self.logger.error(f"YOLO模型文件不存在: {model_path}")
+            return None
+        
+        try:
+            model = YOLO(str(model_path))
+            self.logger.info(f"成功加载YOLO模型: {model_path}")
+            return model
+        except Exception as e:
+            self.logger.error(f"加载YOLO模型失败: {e}")
+            return None
+
+    def _warm_up_detection_model(self):
+        """
+        预热检测模型
+        """
+        self.logger.info("正在预热检测模型，确保模型已加载...")
+        try:
+            dummy_image = self.capture_screen()
+            if dummy_image is not None and dummy_image.size > 0:
+                dummy_result = self.detect_target(dummy_image)
+                self.logger.info("检测模型已预热完成")
+            else:
+                self.logger.warning("无法获取初始截图进行模型预热")
+        except Exception as e:
+            self.logger.warning(f"模型预热过程中出现错误: {e}")
+    
+    def detect_target(self, image):
+        """
+        使用YOLO检测目标
+        """
+        if self.yolo_model is None:
+            self.logger.error("YOLO模型未加载，无法进行检测")
+            return []
+        
+        try:
+            results = self.yolo_model.predict(
+                source=image,
+                conf=CONFIG['DETECTION_CONFIDENCE'],
+                save=False,
+                verbose=False
+            )
+            
+            detections = []
+            result = results[0]
+            
+            if result.boxes is not None:
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confs = result.boxes.conf.cpu().numpy()
+                cls_ids = result.boxes.cls.cpu().numpy()
+                
+                names = result.names if hasattr(result, 'names') else {}
+                
+                for i in range(len(boxes)):
+                    x1, y1, x2, y2 = boxes[i]
+                    conf = confs[i]
+                    cls_id = int(cls_ids[i])
+                    class_name = names.get(cls_id, f"Class_{cls_id}")
+                    
+                    width = x2 - x1
+                    height = y2 - y1
+                    
+                    detections.append({
+                        'bbox': [x1, y1, x2, y2],
+                        'label': class_name,
+                        'score': conf,
+                        'width': width,
+                        'height': height
+                    })
+            
+            self.logger.debug(f"YOLO检测到 {len(detections)} 个目标")
+            return detections
+        except Exception as e:
+            self.logger.error(f"YOLO检测过程中出错: {e}")
+            return []
+
+    def _check_climb_conditions(self, detection_results, confidence_threshold=0.9):
+        """
+        检查climb检测结果是否满足条件
+        参数:
+            detection_results: YOLO检测结果列表
+            confidence_threshold: 置信度阈值，默认0.9
+        返回:
+            bool: 如果满足条件（单个检测且置信度>0.9，或者多个检测中至少一个置信度>0.9）则返回True
+        """
+        if not detection_results:
+            return False
+        
+        # 筛选出所有climb检测结果
+        climb_detections = [
+            detection for detection in detection_results
+            if (
+                detection['label'].lower() == 'climb' or 'climb' in detection['label'].lower()
+            )
+        ]
+        
+        if not climb_detections:
+            return False
+        
+        # 如果只有一个climb检测，要求其置信度超过阈值
+        if len(climb_detections) == 1:
+            return climb_detections[0]['score'] > confidence_threshold
+        # 如果有多个climb检测，要求至少有一个置信度超过阈值
+        else:
+            return any(detection['score'] > confidence_threshold for detection in climb_detections)
+
+    def step(self, move_action, turn_action, move_forward_step=2, turn_angle=30):
+        """
+        执行动作并返回新的状态、奖励和是否结束
+        """
+        move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
+        turn_action_names = ["turn_left", "turn_right"]
+        
+        self.logger.debug(f"执行动作: 移动-{move_action_names[move_action]}, 转头-{turn_action_names[turn_action]}, 步长: {move_forward_step}, 角度: {turn_angle}")
+        
+        # 执行动作前先检查当前状态
+        pre_action_state = self.capture_screen()
+        pre_action_detections = self.detect_target(pre_action_state)
+        
+        # 检查当前状态是否有符合条件的climb类别
+        pre_climb_detected = self._check_climb_conditions(pre_action_detections)
+        
+        if pre_climb_detected:
+            self.logger.info(f"动作执行前已检测到符合条件的climb类别，立即终止")
+            
+            # 保存带识别框的图片
+            self._save_detection_image_with_bounding_boxes(pre_action_state, pre_action_detections, prefix="pre_action_climb_detected")
+            
+            # 完成奖励
+            base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
+            speed_bonus = CONFIG.get('QUICK_COMPLETION_BONUS_FACTOR', 8) * (self.max_steps - self.step_count)
+            reward = base_completion_reward + speed_bonus
+            
+            new_area = self._get_max_detection_area(pre_action_detections)
+            self.last_area = new_area
+            self.last_detection_result = pre_action_detections
+            self.step_count += 1
+            
+            self.logger.info(f"Step {self.step_count}, Area: {new_area:.2f}, Reward: {reward:.2f}, "
+                f"Detected: climb (pre-action), Move Action: {move_action_names[move_action]}, Turn Action: {turn_action_names[turn_action]}")
+            
+            # 关键：执行游戏重置操作
+            self.reset_to_origin()
+            
+            return pre_action_state, reward, True, pre_action_detections
+        
+        # 记录执行动作前的帧
+        pre_action_frame = pre_action_state.copy() if pre_action_state is not None else None
+        
+        # 执行移动动作
+        if move_action == 0 and move_forward_step > 0:  # forward
+            self.controller.move_forward(duration=move_forward_step * CONFIG['forward_coe'])
+        elif move_action == 1 and move_forward_step > 0:  # backward
+            self.controller.move_backward(duration=move_forward_step * CONFIG['forward_coe'])
+        elif move_action == 2 and move_forward_step > 0:  # strafe_left
+            self.controller.strafe_left(duration=move_forward_step * CONFIG['forward_coe'])
+        elif move_action == 3 and move_forward_step > 0:  # strafe_right
+            self.controller.strafe_right(duration=move_forward_step * CONFIG['forward_coe'])
+        
+        # 执行转头动作
+        if turn_action == 0 and turn_angle > 0:  # turn_left
+            self.controller.turn_left(turn_angle * CONFIG['turn_coe'], duration=1)
+        elif turn_action == 1 and turn_angle > 0:  # turn_right
+            self.controller.turn_right(turn_angle * CONFIG['turn_coe'], duration=1)
+
+        # 获取新状态（截图）
+        new_state = self.capture_screen()
+        
+        # 检测目标
+        detection_results = self.detect_target(new_state)
+        
+        # 检查执行动作后是否检测到符合条件的climb类别
+        post_climb_detected = self._check_climb_conditions(detection_results)
+        
+        if post_climb_detected:
+            # 保存带识别框的图片
+            self._save_detection_image_with_bounding_boxes(new_state, detection_results, prefix="post_action_climb_detected")
+        
+        # 计算奖励 - 使用增强的奖励函数
+        reward, new_area = self.calculate_enhanced_reward(
+            detection_results, 
+            (move_action, turn_action), 
+            self.last_area
+        )
+        
+        # 更新状态
+        self.last_area = new_area
+        self.last_detection_result = detection_results
+        
+        # 更新步数
+        self.step_count += 1
+        
+        # 检查是否检测到符合条件的climb类别
+        climb_detected = self._check_climb_conditions(detection_results)
+
+        done = climb_detected or self.step_count >= self.max_steps
+        
+        # 如果检测到符合条件的climb，给予额外奖励
+        if climb_detected:
+            # 保存带识别框的图片
+            self._save_detection_image_with_bounding_boxes(new_state, detection_results, prefix="final_climb_detected")
+            
+            # 基础完成奖励
+            base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
+            
+            # 快速完成奖励
+            quick_completion_factor = CONFIG.get('QUICK_COMPLETION_BONUS_FACTOR', 8)
+            quick_completion_bonus = quick_completion_factor * (self.max_steps - self.step_count) 
+            
+            # 总奖励
+            total_completion_bonus = base_completion_reward + quick_completion_bonus
+            reward += total_completion_bonus
+            self.logger.info(f"检测到符合条件的climb类别！步骤: {self.step_count}, 基础奖励: {base_completion_reward:.2f}, "
+                            f"快速完成奖励: {quick_completion_bonus:.2f}, 总奖励: {total_completion_bonus:.2f}")
+            
+            # 关键：执行游戏重置操作
+            self.reset_to_origin()
+
+        # 输出每步得分
+        self.logger.info(f"S {self.step_count}, A: {new_area:.2f}, R: {reward:.2f}")
+        
+        # 更新位置历史
+        state_feature = len(detection_results) if detection_results else 0
+        self.position_history.append(state_feature)
+        if len(self.position_history) > self.max_history_length:
+            self.position_history.pop(0)
+        
+        # 修改：只有在达到最大步数时才重置，避免重复重置
+        if done and not climb_detected:  # 如果不是因为climb而结束，也要重置
+            self.logger.info(f"达到最大步数 {self.max_steps}")
+            # 在episode结束时重置游戏环境
+            self.reset_to_origin()
+        
+        return new_state, reward, done, detection_results 
+
+    def calculate_enhanced_reward(self, detection_results, action_taken, last_area):
+        """
+        基于SLAM的增强奖励函数
+        """
+        # 原始奖励
+        base_reward, new_area = self.calculate_reward(
+            detection_results, 
+            self.last_center_distance, 
+            action_taken, 
+            last_area
+        )
+        
+        # SLAM相关的奖励
+        slam_reward = self._calculate_exploration_bonus()
+        
+        # 总奖励
+        total_reward = base_reward + slam_reward
+        
+        return total_reward, new_area
+
+    def calculate_reward(self, detection_results, last_center_distance, action_taken, last_area):
+        """
+        计算综合奖励
+        """
+        # 目标检测奖励
+        target_reward = self._calculate_target_presence_reward(detection_results)
+        
+        # 进展奖励
+        progress_reward = self._calculate_progress_reward(detection_results)
+        
+        # 卡死惩罚
+        stuck_penalty = self._calculate_stuck_penalty()
+        
+        # 重复动作惩罚
+        repetition_penalty = self._calculate_repetition_penalty(action_taken)
+        
+        # 视觉变化奖励
+        visual_change_reward = self._calculate_visual_change_reward(action_taken)
+        
+        # 动作一致性奖励
+        consistency_reward = self._calculate_action_consistency_reward(action_taken)
+        
+        # 探索奖励
+        exploration_reward = self._calculate_exploration_reward()
+        
+        # 总奖励
+        total_reward = (target_reward + progress_reward + stuck_penalty + 
+                    repetition_penalty + visual_change_reward + 
+                    consistency_reward + exploration_reward)
+        
+        # 计算新区域面积
+        new_area = self._get_max_detection_area(detection_results) if detection_results else 0
+        
+        return total_reward, new_area
+
+    def _save_detection_image_with_bounding_boxes(self, image, detection_results, prefix="detection"):
+        """
+        保存带检测框的图像
+        """
+        try:
+            # 复制图像以避免修改原始图像
+            img_with_boxes = image.copy()
+            
+            # 绘制检测框
+            for detection in detection_results:
+                bbox = detection['bbox']
+                label = detection['label']
+                score = detection['score']
+                
+                # 转换边界框坐标为整数
+                x1, y1, x2, y2 = map(int, bbox)
+                
+                # 绘制矩形框
+                color = (0, 255, 0)  # 绿色框
+                thickness = 2
+                cv2.rectangle(img_with_boxes, (x1, y1), (x2, y2), color, thickness)
+                
+                # 添加标签和置信度文本
+                text = f"{label}: {score:.2f}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.5
+                text_color = (255, 255, 255)  # 白色文字
+                text_thickness = 1
+                
+                # 获取文本框的尺寸
+                (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, text_thickness)
+                
+                # 绘制文本背景
+                cv2.rectangle(img_with_boxes, (x1, y1 - text_height - 10), 
+                            (x1 + text_width, y1), color, -1)
+                
+                # 在图像上绘制文本
+                cv2.putText(img_with_boxes, text, (x1, y1 - 5), font, 
+                        font_scale, text_color, text_thickness)
+            
+            # 生成文件名
+            timestamp = int(time.time() * 1000)  # 使用毫秒时间戳
+            filename = f"{prefix}_detection_{timestamp}.png"
+            
+            # 确定保存路径
+            save_dir = Path(__file__).parent / "detection_images"
+            if not save_dir.exists():
+                save_dir.mkdir(parents=True, exist_ok=True)
+            
+            filepath = save_dir / filename
+            
+            # 保存图像
+            success = cv2.imwrite(str(filepath), img_with_boxes)
+            
+            if success:
+                self.logger.info(f"检测结果图像已保存: {filepath}")
+            else:
+                self.logger.error(f"保存检测结果图像失败: {filepath}")
+                
+        except Exception as e:
+            self.logger.error(f"保存带检测框图像时出错: {e}")
+
+    def reset(self):
+        """
+        重置环境
+        """
+        self.logger.debug("重置环境")
+        self.step_count = 0
+        self.last_center_distance = float('inf')
+        self.last_area = 0
+        self.last_detection_result = None
+        self.position_history = []
+        self.action_history.clear()
+        self.visual_change_history.clear()
+        self.no_progress_steps = 0
+        self.total_no_progress_steps = 0
+        self.previous_frame = None
+        self.stuck_detector = EnhancedStuckDetector(window_size=5)
+        self.slam_system = SLAMSystem()  # 重置SLAM系统
+        initial_state = self.capture_screen()
+        return initial_state
+
+
+class SLAMEnhancedGRUPPOAgent:
+    """
+    集成SLAM的增强PPO智能体
     """
     def __init__(self, state_dim, move_action_dim, turn_action_dim):
         config = CONFIG
@@ -1094,7 +2056,7 @@ class EnhancedGRUPPOAgent:
         self.logger = setup_logging()
         
         # Create policy networks
-        self.policy = EnhancedGRUPolicyNetwork(
+        self.policy = SLAMEnhancedGRUPolicyNetwork(
             state_dim, move_action_dim, turn_action_dim, self.hidden_size
         )
         self.optimizer = torch.optim.Adam(
@@ -1102,7 +2064,7 @@ class EnhancedGRUPPOAgent:
             lr=self.lr, 
             betas=self.betas
         )
-        self.policy_old = EnhancedGRUPolicyNetwork(
+        self.policy_old = SLAMEnhancedGRUPolicyNetwork(
             state_dim, move_action_dim, turn_action_dim, self.hidden_size
         )
         self.policy_old.load_state_dict(self.policy.state_dict())
@@ -1111,6 +2073,7 @@ class EnhancedGRUPPOAgent:
         
         # State history for sequence input
         self.state_history = deque(maxlen=self.sequence_length)
+        self.slam_feature_history = deque(maxlen=self.sequence_length)  # 新增SLAM特征历史
         
         # 收敛监控相关变量
         self.convergence_monitor = {
@@ -1150,26 +2113,35 @@ class EnhancedGRUPPOAgent:
         # 自适应学习率因子
         self.adaptive_lr_factor = 1.0
 
-    def act(self, state, memory, return_debug_info=False):
+    def act(self, state, memory, slam_feature=None, return_debug_info=False):
         # 预处理状态
         state_tensor = self._preprocess_state(state)
         
         # 将当前状态添加到历史记录
         self.state_history.append(state_tensor)
         
+        # 添加SLAM特征到历史记录
+        if slam_feature is not None:
+            self.slam_feature_history.append(torch.tensor(slam_feature, dtype=torch.float32))
+        else:
+            # 如果没有SLAM特征，使用零向量
+            self.slam_feature_history.append(torch.zeros(12, dtype=torch.float32))
+        
         # 如果历史记录长度不足，用当前状态填充
         while len(self.state_history) < self.sequence_length:
             self.state_history.appendleft(state_tensor)
+            self.slam_feature_history.appendleft(torch.zeros(12, dtype=torch.float32))
         
         # 转换为张量并添加批次维度
         state_seq = torch.stack(list(self.state_history)).unsqueeze(0)  # [batch=1, seq_len, channels, height, width]
+        slam_seq = torch.stack(list(self.slam_feature_history)).unsqueeze(0)  # [batch=1, seq_len, 12]
         
         # 使用旧策略获取动作概率
         with torch.no_grad():
             if return_debug_info:
-                move_probs, turn_probs, action_params, state_val, _, debug_info = self.policy_old(state_seq, return_debug_info=True)
+                move_probs, turn_probs, action_params, state_val, _, debug_info = self.policy_old(state_seq, slam_seq, return_debug_info=True)
             else:
-                move_probs, turn_probs, action_params, state_val, _ = self.policy_old(state_seq)
+                move_probs, turn_probs, action_params, state_val, _ = self.policy_old(state_seq, slam_seq)
                 
             move_dist = Categorical(move_probs)
             turn_dist = Categorical(turn_probs)
@@ -1230,7 +2202,8 @@ class EnhancedGRUPPOAgent:
             logprob.item(),
             0,  # 奖励稍后更新
             False,  # 是否结束稍后更新
-            [move_forward_step_normalized, turn_angle_normalized]  # 存储归一化的参数
+            [move_forward_step_normalized, turn_angle_normalized],  # 存储归一化的参数
+            slam_feature  # 存储SLAM特征
         )
         
         if return_debug_info:
@@ -1248,6 +2221,7 @@ class EnhancedGRUPPOAgent:
         
         # 将记忆切分成多个序列段
         all_states = list(memory.states)
+        all_slam_features = list(memory.slam_features)  # 新增SLAM特征
         all_move_actions = list(memory.move_actions)
         all_turn_actions = list(memory.turn_actions)
         all_logprobs = list(memory.logprobs)
@@ -1256,8 +2230,8 @@ class EnhancedGRUPPOAgent:
         
         if len(all_states) < sequence_length:
             # 如果序列太短，直接使用全部数据
-            self._train_single_sequence(
-                all_states, all_move_actions, all_turn_actions,
+            self._train_single_sequence_with_slam(
+                all_states, all_slam_features, all_move_actions, all_turn_actions,
                 all_logprobs, all_rewards, all_terminals
             )
             return
@@ -1267,6 +2241,7 @@ class EnhancedGRUPPOAgent:
             end_idx = min(start_idx + sequence_length, len(all_states))
             
             seq_states = all_states[start_idx:end_idx]
+            seq_slam_features = all_slam_features[start_idx:end_idx]
             seq_move_actions = all_move_actions[start_idx:end_idx]
             seq_turn_actions = all_turn_actions[start_idx:end_idx]
             seq_logprobs = all_logprobs[start_idx:end_idx]
@@ -1274,16 +2249,17 @@ class EnhancedGRUPPOAgent:
             seq_terminals = all_terminals[start_idx:end_idx]
             
             if len(seq_states) == sequence_length:
-                self._train_single_sequence(
-                    seq_states, seq_move_actions, seq_turn_actions,
+                self._train_single_sequence_with_slam(
+                    seq_states, seq_slam_features, seq_move_actions, seq_turn_actions,
                     seq_logprobs, seq_rewards, seq_terminals
                 )
 
-    def _train_single_sequence(self, states_list, move_actions, turn_actions, 
-                            old_logprobs, rewards, terminals):
-        """训练单个序列段"""
+    def _train_single_sequence_with_slam(self, states_list, slam_features_list, move_actions, turn_actions, 
+                                        old_logprobs, rewards, terminals):
+        """训练单个序列段，包含SLAM数据"""
         # 构建状态序列
         states = torch.stack(states_list).unsqueeze(0)  # [1, seq_len, C, H, W]
+        slam_features = torch.stack(slam_features_list).unsqueeze(0)  # [1, seq_len, 12]
         move_actions = torch.tensor(move_actions, dtype=torch.long)
         turn_actions = torch.tensor(turn_actions, dtype=torch.long)
         old_logprobs = torch.tensor(old_logprobs, dtype=torch.float)
@@ -1306,7 +2282,7 @@ class EnhancedGRUPPOAgent:
         # PPO更新循环
         for _ in range(self.K_epochs):
             # 前向传播
-            move_probs, turn_probs, action_params, state_vals, _ = self.policy(states)
+            move_probs, turn_probs, action_params, state_vals, _ = self.policy(states, slam_features)
             
             # 修正张量形状处理 - 确保维度一致
             # state_vals形状应该是 [batch, seq_len, 1] -> [seq_len]
@@ -1381,7 +2357,8 @@ class EnhancedGRUPPOAgent:
             
             # 梯度裁剪
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=CONFIG.get('GRADIENT_CLIP_NORM', 0.5))
-            self.optimizer.step() 
+            self.optimizer.step()
+
     def check_convergence_status(self, episode_reward, episode_length, success_flag=False):
         """
         检查收敛状态并返回相关信息
