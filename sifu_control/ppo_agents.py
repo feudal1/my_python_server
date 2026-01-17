@@ -300,6 +300,9 @@ class TargetSearchEnvironment:
         self.last_area = 0
         self.logger = setup_logging()
         
+        # 添加存储最近检测图像的队列 - 移到这里，确保在调用检测相关方法前已初始化
+        self.recent_detection_images = deque(maxlen=5)
+        
         self.yolo_model = self._load_yolo_model()
         self._warm_up_detection_model()
         
@@ -308,11 +311,7 @@ class TargetSearchEnvironment:
         self.CENTER_THRESHOLD = CONFIG['CENTER_THRESHOLD']
         
         # 动作历史记录
-        self.action_history = deque(maxlen=10)
-        
-        # 添加存储最近检测图像的队列
-        self.recent_detection_images = deque(maxlen=5)
-        
+        self.action_history = deque(maxlen=10)     
     def _load_yolo_model(self):
         """
         加载YOLO模型
