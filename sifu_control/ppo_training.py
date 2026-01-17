@@ -287,7 +287,7 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
             checkpoint_path = f"{CONFIG['MODEL_PATH'].rsplit('.', 1)[0]}_checkpoint_ep_{episode + 1}.pth"
             ppo_agent.save_checkpoint(checkpoint_path, episode + 1)
             print(f"检查点已保存: {checkpoint_path}")
-        
+        print(f"训练进度: {episode+1}/{total_episodes}")
         # 每25轮打印一次收敛报告
         if episode %10 == 0:
             current_time = time.time()
