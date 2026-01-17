@@ -53,16 +53,16 @@ def create_environment_and_agent():
     """
     创建环境和智能体
     """
-    from ppo_agents import EnhancedTargetSearchEnvironment
-    from ppo_agents import EnhancedGRUPPOAgent
-    from ppo_agents import GRUMemory
+    from ppo_agents import TargetSearchEnvironment
+    from ppo_agents import PPOAgent
+    from ppo_agents import Memory
     
-    env = EnhancedTargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
+    env = TargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
     move_action_dim = 4  # forward, backward, strafe_left, strafe_right
     turn_action_dim = 2  # turn_left, turn_right
     
-    ppo_agent = EnhancedGRUPPOAgent(
-        (3, 480, 640), 
+    ppo_agent = PPOAgent(
+        (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640)), 
         move_action_dim,
         turn_action_dim
     )
@@ -120,9 +120,8 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
     success_flag = False
     
     # 为每个episode创建独立的记忆
-    from ppo_agents import GRUMemory
-    episode_memory = GRUMemory(sequence_length=CONFIG['SEQUENCE_LENGTH'])
-    ppo_agent.state_history.clear()
+    from ppo_agents import Memory
+    episode_memory = Memory()
     
     # 定义动作名称映射
     move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
@@ -200,19 +199,9 @@ def get_deterministic_action(ppo_agent, state):
     """
     state_tensor = ppo_agent._preprocess_state(state)
     
-    # 将当前状态添加到历史记录
-    ppo_agent.state_history.append(state_tensor)
-    
-    # 如果历史记录长度不足，用当前状态填充
-    while len(ppo_agent.state_history) < ppo_agent.sequence_length:
-        ppo_agent.state_history.appendleft(state_tensor)
-    
-    # 转换为张量并添加批次维度
-    state_seq = torch.stack(list(ppo_agent.state_history)).unsqueeze(0)
-    
     # 使用旧策略获取动作概率（但不采样，而是选择最高概率的动作）
     with torch.no_grad():
-        move_probs, turn_probs, action_params, state_val, _ = ppo_agent.policy_old(state_seq)
+        move_probs, turn_probs, action_params, state_val = ppo_agent.policy_old(state_tensor.unsqueeze(0))
         
         # 确保处理正确的张量维度
         move_probs_squeezed = move_probs.squeeze() if move_probs.dim() > 1 else move_probs
@@ -239,10 +228,9 @@ def get_deterministic_action(ppo_agent, state):
     return move_action, turn_action, move_forward_step, turn_angle
 
 
-# 在 perform_training_loop 函数中添加状态多样性监控
 def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
     """
-    执行训练循环 - 增加状态多样性监控和检查点保存
+    执行训练循环
     """
     scores = deque(maxlen=50)
     total_rewards = deque(maxlen=50)
@@ -252,21 +240,14 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
     training_stats = {
         'episode_count': 0,
         'successful_episodes': 0,
-        'average_reward_history': [],
-        'action_diversity': [],  # 新增：动作多样性
-        'state_diversity': [],   # 新增：状态多样性
-        'entropy_history': []    # 新增：策略熵
+        'average_reward_history': []
     }
     
     print(f"开始训练循环，从第 {start_episode} 轮到第 {total_episodes} 轮")
     loop_start_time = time.time()
     
     for episode in range(start_episode, total_episodes):
-        # 记录episode开始时的状态
-        episode_states = []
-        episode_actions = []
-        
-        print_debug = True  # 每50轮打印一次详细信息
+        print_debug = episode % 50 == 0  # 每50轮打印一次详细信息
         result = run_episode(env, ppo_agent, episode, total_episodes, training_mode=True, print_debug=print_debug)
         
         # 更新统计数据
@@ -278,18 +259,16 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
         if result['success_flag']:
             training_stats['successful_episodes'] += 1
         
-        # 使用收敛监控
-        convergence_info = ppo_agent.check_convergence_status(
-            result['total_reward'], result['step_count'], result['success_flag'])
-        
         # 每10轮保存一次检查点
         if (episode + 1) % 10 == 0:
             checkpoint_path = f"{CONFIG['MODEL_PATH'].rsplit('.', 1)[0]}_checkpoint_ep_{episode + 1}.pth"
             ppo_agent.save_checkpoint(checkpoint_path, episode + 1)
             print(f"检查点已保存: {checkpoint_path}")
+        
         print(f"训练进度: {episode+1}/{total_episodes}")
-        # 每25轮打印一次收敛报告
-        if episode %10 == 0:
+        
+        # 每25轮打印一次统计信息
+        if episode % 25 == 0:
             current_time = time.time()
             elapsed_time = current_time - loop_start_time
             
@@ -301,26 +280,20 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
                   f"总奖励: {result['total_reward']:.3f}, "
                   f"步数: {result['step_count']}, "
                   f"成功: {result['success_flag']}")
-            print(f"收敛监控 - 学习率: {convergence_info['current_learning_rate']:.6f}")
             print(f"当前训练耗时: {elapsed_time:.2f} 秒 ({elapsed_time/60:.2f} 分钟)")
-        
-        # 检查早停条件
-        if convergence_info['should_stop_early']:
-            current_time = time.time()
-            elapsed_time = current_time - loop_start_time
-            print(f"早停触发: 连续{ppo_agent.patience}轮无改善，总耗时: {elapsed_time:.2f} 秒")
-            break
     
     return training_stats
-def continue_training_gru_ppo_agent(model_path=None):
+
+
+def continue_training_ppo_agent(model_path=None):
     """
-    基于现有GRU模型继续训练 - 使用全局配置，带收敛监控
+    基于现有模型继续训练
     """
     config = CONFIG
     if model_path is None:
         model_path = config['MODEL_PATH']
     
-    print(f"基于现有GRU模型继续训练: {model_path}, 额外训练 {config['EPISODES']} 轮")
+    print(f"基于现有模型继续训练: {model_path}, 额外训练 {config['EPISODES']} 轮")
     
     # 开始计时
     start_time = time.time()
@@ -338,11 +311,11 @@ def continue_training_gru_ppo_agent(model_path=None):
     end_time = time.time()
     training_duration = end_time - start_time
     
-    print(f"GRU继续训练完成！")
+    print(f"继续训练完成！")
     print(f"训练耗时: {training_duration:.2f} 秒 ({training_duration/60:.2f} 分钟)")
     
     torch.save(ppo_agent.policy.state_dict(), model_path)
-    print(f"更新后的GRU PPO模型已保存为 {model_path}")
+    print(f"更新后的PPO模型已保存为 {model_path}")
     
     return {
         "status": "success", 
@@ -356,14 +329,14 @@ def continue_training_gru_ppo_agent(model_path=None):
     }
 
 
-def train_new_gru_ppo_agent(model_path=None):
+def train_new_ppo_agent(model_path=None):
     """
-    从头开始训练GRU PPO智能体
+    从头开始训练PPO智能体
     """
     if model_path is None:
         model_path = CONFIG['MODEL_PATH']
     
-    print(f"开始从头训练GRU PPO智能体: {model_path}")
+    print(f"开始从头训练PPO智能体: {model_path}")
     
     # 开始计时
     start_time = time.time()
@@ -381,11 +354,11 @@ def train_new_gru_ppo_agent(model_path=None):
     end_time = time.time()
     training_duration = end_time - start_time
     
-    print(f"GRU从头训练完成！")
+    print(f"从头训练完成！")
     print(f"训练耗时: {training_duration:.2f} 秒 ({training_duration/60:.2f} 分钟)")
     
     torch.save(ppo_agent.policy.state_dict(), model_path)
-    print(f"新训练的GRU PPO模型已保存为 {model_path}")
+    print(f"新训练的PPO模型已保存为 {model_path}")
     
     return {
         "status": "success", 
@@ -399,14 +372,14 @@ def train_new_gru_ppo_agent(model_path=None):
     }
 
 
-def evaluate_trained_gru_ppo_agent(model_path=None):
+def evaluate_trained_ppo_agent(model_path=None):
     """
-    评估已训练的GRU PPO模型
+    评估已训练的PPO模型
     """
     if model_path is None:
         model_path = CONFIG['MODEL_PATH']
     
-    print(f"评估已训练的GRU PPO模型: {model_path}")
+    print(f"评估已训练的PPO模型: {model_path}")
     
     # 开始计时
     start_time = time.time()
@@ -431,7 +404,7 @@ def evaluate_trained_gru_ppo_agent(model_path=None):
     
     for episode in range(evaluation_episodes):
         # 每隔几轮打印一次调试信息
-        print_debug =True  # 每2轮打印一次调试信息
+        print_debug = episode % 2 == 0  # 每2轮打印一次调试信息
         result = run_episode(env, ppo_agent, episode, evaluation_episodes, training_mode=False, print_debug=print_debug)
         
         scores.append(result['step_count'])
@@ -483,9 +456,9 @@ def execute_ppo_tool(tool_name, *args):
     """
     
     tool_functions = {
-        "continue_train_gru_ppo_agent": continue_training_gru_ppo_agent,
-        "train_new_gru_ppo_agent": train_new_gru_ppo_agent,
-        "evaluate_trained_gru_ppo_agent": evaluate_trained_gru_ppo_agent
+        "continue_train_ppo_agent": continue_training_ppo_agent,
+        "train_new_ppo_agent": train_new_ppo_agent,
+        "evaluate_trained_ppo_agent": evaluate_trained_ppo_agent
     }
     
     if tool_name not in tool_functions:
@@ -511,12 +484,12 @@ def main():
     import sys
     if len(sys.argv) < 2:
         print("默认运行继续训练...")
-        continue_training_gru_ppo_agent()
+        continue_training_ppo_agent()
         print("导入成功！")
         print("\n可用的功能:")
-        print("1. 训练GRU门搜索智能体: python ppo_training.py train_new_gru_ppo_agent [model_path]")
-        print("2. 继续训练GRU门搜索智能体: python ppo_training.py continue_train_gru_ppo_agent [model_path]")
-        print("3. 评估已训练GRU模型: python ppo_training.py evaluate_trained_gru_ppo_agent [model_path]")
+        print("1. 训练门搜索智能体: python ppo_training.py train_new_ppo_agent [model_path]")
+        print("2. 继续训练门搜索智能体: python ppo_training.py continue_train_ppo_agent [model_path]")
+        print("3. 评估已训练模型: python ppo_training.py evaluate_trained_ppo_agent [model_path]")
         
         return
 
