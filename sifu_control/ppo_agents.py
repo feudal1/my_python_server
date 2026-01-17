@@ -746,7 +746,7 @@ class TargetSearchEnvironment:
             success = cv2.imwrite(str(filepath), img_with_boxes)
             
             if success:
-                self.logger.info(f"检测结果图像已保存: {filepath}")
+                
                 
                 # 将文件路径添加到最近检测图像队列
                 self.recent_detection_images.append(str(filepath))
