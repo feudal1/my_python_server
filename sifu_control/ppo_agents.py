@@ -608,13 +608,7 @@ class TargetSearchEnvironment:
         # 检测目标
         detection_results = self.detect_target(new_state)
         
-        # 检查执行动作后是否检测到符合条件的climb类别
-        post_climb_detected = self._check_climb_conditions(detection_results)
-        
-        if post_climb_detected:
-            # 保存带识别框的图片
-            self._save_detection_image_with_bounding_boxes(new_state, detection_results, prefix="post_action_climb_detected")
-        
+
         # 计算奖励
         reward, new_area = self.calculate_reward(
             detection_results, 
