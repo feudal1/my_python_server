@@ -247,7 +247,7 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
     loop_start_time = time.time()
     
     for episode in range(start_episode, total_episodes):
-        print_debug = episode % 50 == 0  # 每50轮打印一次详细信息
+        print_debug = True  # 每50轮打印一次详细信息
         result = run_episode(env, ppo_agent, episode, total_episodes, training_mode=True, print_debug=print_debug)
         
         # 更新统计数据
@@ -267,8 +267,8 @@ def perform_training_loop(env, ppo_agent, start_episode, total_episodes):
         
         print(f"训练进度: {episode+1}/{total_episodes}")
         
-        # 每25轮打印一次统计信息
-        if episode % 25 == 0:
+      
+        if episode % 10 == 0:
             current_time = time.time()
             elapsed_time = current_time - loop_start_time
             
@@ -404,7 +404,7 @@ def evaluate_trained_ppo_agent(model_path=None):
     
     for episode in range(evaluation_episodes):
         # 每隔几轮打印一次调试信息
-        print_debug = episode % 2 == 0  # 每2轮打印一次调试信息
+        print_debug = True  # 每2轮打印一次调试信息
         result = run_episode(env, ppo_agent, episode, evaluation_episodes, training_mode=False, print_debug=print_debug)
         
         scores.append(result['step_count'])
