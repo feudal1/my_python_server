@@ -22,6 +22,15 @@ import re
 import tkinter as tk
 from tkinter import ttk
 
+# 导入Ground-SAM特征提取器
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'grounding_dino'))
+try:
+    from ground_sam_feature_extractor import get_groundsam_extractor, GroundSAMFeatureExtractor
+    GROUND_SAM_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Ground-SAM不可用: {e}")
+    GROUND_SAM_AVAILABLE = False
+
 
 def load_config():
     """加载配置文件"""
@@ -31,6 +40,42 @@ def load_config():
     return config 
 
 CONFIG = load_config()
+
+# 全局Ground-SAM特征提取器实例
+_ground_sam_extractor = None
+
+def get_global_ground_sam_extractor(force_reload=False):
+    """
+    获取全局Ground-SAM特征提取器实例(单例模式)
+    Args:
+        force_reload: 是否强制重新加载
+    Returns:
+        GroundSAMFeatureExtractor实例,如果不可用则返回None
+    """
+    global _ground_sam_extractor
+    
+    if not GROUND_SAM_AVAILABLE:
+        return None
+    
+    if _ground_sam_extractor is None or force_reload:
+        try:
+            logger = setup_logging()
+            logger.info("正在初始化Ground-SAM特征提取器...")
+            
+            # 从配置中读取模型设置
+            sam_model_type = CONFIG.get('SAM_MODEL_TYPE', 'vit_b')
+            dino_model_name = CONFIG.get('DINO_MODEL_NAME', 'IDEA-Research/grounding-dino-tiny')
+            
+            _ground_sam_extractor = get_groundsam_extractor(
+                sam_model_type=sam_model_type,
+                dino_model_name=dino_model_name
+            )
+            logger.info(f"Ground-SAM特征提取器初始化完成 (SAM: {sam_model_type}, DINO: {dino_model_name})")
+        except Exception as e:
+            logger.error(f"初始化Ground-SAM失败: {e}")
+            _ground_sam_extractor = None
+    
+    return _ground_sam_extractor
 
 
 # 配置日志
@@ -70,108 +115,93 @@ def setup_logging():
     return logger
 
 
-class ResidualBlock(nn.Module):
+class GroundSAMFeatureEncoder(nn.Module):
     """
-    ResNet基本块
+    Ground-SAM特征编码器
+    将冻结的SAM特征编码为可训练的特征向量
     """
-    def __init__(self, in_channels, out_channels, stride=1):
-        super(ResidualBlock, self).__init__()
+    def __init__(self, input_channels, feature_dim=256):
+        super(GroundSAMFeatureEncoder, self).__init__()
         
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, 
-                              stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
+        self.input_channels = input_channels
+        self.feature_dim = feature_dim
         
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, 
-                              stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        
-        # 残差连接
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, 
-                         stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
-
-    def forward(self, x):
-        identity = x
-        
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        
-        out = self.conv2(out)
-        out = self.bn2(out)
-        
-        out += self.shortcut(identity)
-        out = self.relu(out)
-        
-        return out
-
-
-class ResNetFeatureExtractor(nn.Module):
-    """
-    ResNet特征提取器
-    """
-    def __init__(self, input_channels=3, block_channels=[32, 64, 128]):
-        super(ResNetFeatureExtractor, self).__init__()
-        
-        # 使用配置文件中的图像尺寸
-        height = CONFIG.get('IMAGE_HEIGHT', 480)
-        width = CONFIG.get('IMAGE_WIDTH', 640)
-        
-        # 初始卷积层
-        self.conv1 = nn.Conv2d(input_channels, block_channels[0], 
-                              kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(block_channels[0])
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        
-        # ResNet层
-        layers = []
-        # 第一层
-        layers.append(ResidualBlock(block_channels[0], block_channels[0]))
-        layers.append(ResidualBlock(block_channels[0], block_channels[0]))
-        
-        # 第二层 - 下采样
-        layers.append(ResidualBlock(block_channels[0], block_channels[1], stride=2))
-        layers.append(ResidualBlock(block_channels[1], block_channels[1]))
-        
-        # 第三层 - 下采样
-        layers.append(ResidualBlock(block_channels[1], block_channels[2], stride=2))
-        layers.append(ResidualBlock(block_channels[2], block_channels[2]))
-        
-        self.layers = nn.Sequential(*layers)
-        
-        # 全局平均池化
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc_features = nn.Linear(block_channels[2], 256)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-        
-        x = self.layers(x)
-        
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)  # 展平
-        x = self.fc_features(x)
-        return x
+        # 编码器网络
+        self.encoder = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(64),
+            
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(128),
+            
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(256),
+            
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(256, feature_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
+    
+    def forward(self, sam_features):
+        """
+        编码SAM特征
+        Args:
+            sam_features: SAM图像嵌入 (H, W, C) 或 (B, H, W, C)
+        Returns:
+            编码后的特征向量
+        """
+        if sam_features.dim() == 3:
+            # 单张图像: (H, W, C) -> (C, H, W)
+            x = sam_features.permute(2, 0, 1).unsqueeze(0)
+            x = self.encoder(x)
+            return x.squeeze(0)
+        elif sam_features.dim() == 4:
+            # 批量: (B, H, W, C) -> (B, C, H, W)
+            x = sam_features.permute(0, 3, 1, 2)
+            x = self.encoder(x)
+            return x
+        else:
+            raise ValueError(f"不支持的输入维度: {sam_features.dim()}")
 
 
 class PolicyNetwork(nn.Module):
     """
-    策略网络
+    策略网络(使用Ground-SAM特征提取)
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256):
+    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256, use_ground_sam=False):
         super(PolicyNetwork, self).__init__()
         
-        self.feature_extractor = ResNetFeatureExtractor(3)
-        feature_size = 256  # 根据上面的修改调整
+        self.use_ground_sam = use_ground_sam and GROUND_SAM_AVAILABLE
+        
+        # 特征维度
+        feature_size = 256
+        
+        # 如果使用Ground-SAM,初始化SAM特征编码器
+        if self.use_ground_sam:
+            try:
+                extractor = get_global_ground_sam_extractor()
+                if extractor is not None:
+                    # 初始化SAM特征编码器(可训练部分)
+                    sam_channels, _, _ = extractor.get_feature_dim()
+                    self.sam_feature_encoder = GroundSAMFeatureEncoder(sam_channels, feature_dim=256)
+                    self.has_ground_sam = True
+                    logger = setup_logging()
+                    logger.info(f"Ground-SAM编码器已初始化, SAM通道数: {sam_channels}, 特征维度: {feature_size}")
+                else:
+                    self.has_ground_sam = False
+            except Exception as e:
+                logger = setup_logging()
+                logger.warning(f"无法初始化Ground-SAM: {e}")
+                self.has_ground_sam = False
+        else:
+            self.has_ground_sam = False
+        
+        
         
         # Actor heads
         self.move_actor = nn.Sequential(
@@ -213,7 +243,50 @@ class PolicyNetwork(nn.Module):
         self.logger = setup_logging()
 
     def forward(self, state, return_debug_info=False):
-        features = self.feature_extractor(state)
+        """
+        前向传播
+        Args:
+            state: 输入状态(图像)
+            return_debug_info: 是否返回调试信息
+        Returns:
+            策略输出
+        """
+        # 使用Ground-SAM提取特征
+        if self.has_ground_sam and self.training:
+            try:
+                # 将tensor转换回numpy图像
+                if state.dim() == 4:
+                    # 批量处理
+                    batch_size = state.shape[0]
+                    sam_features_list = []
+                    for i in range(batch_size):
+                        image_np = state[i].permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                        sam_embedding = self._extract_sam_embedding(image_np)
+                        sam_encoded = self.sam_feature_encoder(sam_embedding)
+                        sam_features_list.append(sam_encoded)
+                    features = torch.stack(sam_features_list)
+                else:
+                    # 单张图像
+                    image_np = state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                    sam_embedding = self._extract_sam_embedding(image_np)
+                    features = self.sam_feature_encoder(sam_embedding)
+            except Exception as e:
+                # 如果SAM特征提取失败，返回零特征
+                logger = setup_logging()
+                logger.error(f"Ground-SAM特征提取失败: {e}")
+                # 返回零张量作为备选
+                if state.dim() == 4:
+                    batch_size = state.shape[0]
+                    features = torch.zeros(batch_size, 256).to(state.device)
+                else:
+                    features = torch.zeros(1, 256).to(state.device)
+        else:
+            # 如果不使用Ground-SAM，返回零特征
+            if state.dim() == 4:
+                batch_size = state.shape[0]
+                features = torch.zeros(batch_size, 256).to(state.device)
+            else:
+                features = torch.zeros(1, 256).to(state.device)
         
         # Actor outputs
         move_logits = self.move_actor(features)
@@ -231,7 +304,8 @@ class PolicyNetwork(nn.Module):
                 'turn_logits': turn_logits.detach().cpu().numpy(),
                 'action_params': action_params.detach().cpu().numpy(),
                 'value': value.detach().cpu().numpy(),
-                'features_shape': features.shape
+                'features_shape': features.shape,
+                'using_ground_sam': self.has_ground_sam
             }
             
             # 打印模型输出信息
@@ -254,6 +328,24 @@ class PolicyNetwork(nn.Module):
                 action_params,
                 value
             )
+    
+    def _extract_sam_embedding(self, image_np):
+        """
+        提取SAM图像嵌入(冻结的预训练模型)
+        Args:
+            image_np: numpy数组图像 (H, W, 3)
+        Returns:
+            SAM嵌入张量
+        """
+        extractor = get_global_ground_sam_extractor()
+        if extractor is None:
+            raise ValueError("Ground-SAM提取器未初始化")
+        
+        with torch.no_grad():  # SAM是冻结的,不计算梯度
+            image_features = extractor.sam_backbone.extract_image_features(image_np)
+            sam_embedding = image_features['image_embedding']
+        
+        return sam_embedding
 
 
 class Memory:
@@ -291,16 +383,17 @@ class Memory:
 
 class RealTimeVisualizer:
     """
-    实时可视化器，使用Tkinter显示截图、YOLO检测框和智能体状态
+    实时可视化器,使用Tkinter显示截图、YOLO检测框、Ground-SAM特征和智能体状态
     """
     def __init__(self, window_name="PPO Agent Visualizer"):
         self.window_name = window_name
         self.current_image = None
         self.detections = []
         self.agent_info = {}
+        self.ground_sam_features = None  # 存储Ground-SAM特征
         self.image_lock = Lock()
         self.info_queue = queue.Queue(maxsize=10)  # 限制队列大小
-        
+
         # 标记是否在主线程中初始化
         self.root = None
         self.image_frame = None
@@ -308,7 +401,7 @@ class RealTimeVisualizer:
         self.display_image = None
         self.image_tk = None
         self.timer_id = None
-        
+
         # 使用队列在线程间传递数据
         self.gui_queue = queue.Queue()
 
@@ -339,48 +432,84 @@ class RealTimeVisualizer:
             # 创建Canvas用于显示图像
             self.canvas = tk.Canvas(self.image_frame, bg="black")
             self.canvas.pack(fill=tk.BOTH, expand=True)
-    def update_image_and_detections(self, image, detections):
+    def update_image_and_detections(self, image, detections, ground_sam_features=None):
         """
         更新图像和检测结果，并立即触发界面更新
+        Args:
+            image: 当前图像
+            detections: YOLO检测结果
+            ground_sam_features: Ground-SAM特征(可选)
         """
         with self.image_lock:
             self.current_image = image.copy() if image is not None else None
             self.detections = detections.copy() if detections is not None else []
+            self.ground_sam_features = ground_sam_features
 
         # 将更新请求放入队列
         try:
-            self.gui_queue.put(('update_image', self.current_image, self.detections), block=False)
+            self.gui_queue.put(('update_image', self.current_image, self.detections, self.ground_sam_features), block=False)
         except queue.Full:
             pass
 
-    def _update_image_display(self, image, detections):
+    def _update_image_display(self, image, detections, ground_sam_features=None):
         """
         更新图像显示
+        Args:
+            image: 当前图像
+            detections: 检测结果
+            ground_sam_features: Ground-SAM特征(可选)
         """
         if image is not None:
             # 绘制检测框
             display_img = self._draw_detections(image.copy())
-            
+
+            # 绘制Ground-SAM特征
+            if ground_sam_features is not None:
+                display_img = self._draw_ground_sam_features(display_img, ground_sam_features)
+
             # 如果有智能体信息，也绘制在图像上
             if hasattr(self, '_last_agent_info') and self._last_agent_info:
                 display_img = self._add_agent_info_to_image(display_img, self._last_agent_info)
-            
+
             # 转换为PIL图像
             pil_image = Image.fromarray(cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB))
-            
+
             # 调整图像大小以适应canvas
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
-            
+
             if canvas_width > 1 and canvas_height > 1:
                 pil_image = pil_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
-            
+
             # 转换为PhotoImage对象
             self.image_tk = ImageTk.PhotoImage(pil_image)
-            
+
             # 更新canvas上的图像
             self.canvas.delete("all")
             self.canvas.create_image(canvas_width//2, canvas_height//2, anchor=tk.CENTER, image=self.image_tk)
+
+    def _update_image_display_with_existing_features(self, display_img):
+        """
+        更新图像显示(使用已有的特征信息,不重新绘制Ground-SAM特征)
+        Args:
+            display_img: 已经绘制好agent信息的图像
+        """
+        # 转换为PIL图像
+        pil_image = Image.fromarray(cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB))
+
+        # 调整图像大小以适应canvas
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        if canvas_width > 1 and canvas_height > 1:
+            pil_image = pil_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+
+        # 转换为PhotoImage对象
+        self.image_tk = ImageTk.PhotoImage(pil_image)
+
+        # 更新canvas上的图像
+        self.canvas.delete("all")
+        self.canvas.create_image(canvas_width//2, canvas_height//2, anchor=tk.CENTER, image=self.image_tk)
 
     def _add_agent_info_to_image(self, image, info):
         """
@@ -392,14 +521,14 @@ class RealTimeVisualizer:
         text_color = (255, 255, 255)  # 白色文字
         text_thickness = 2
         background_color = (0, 0, 0)  # 黑色背景
-        
+
         # 计算起始位置
         start_y = 30
         line_height = 30
-        
+
         # 准备要显示的信息
         lines = []
-        
+
         # Move Probabilities
         move_probs = info.get('move_probs', 'N/A')
         if isinstance(move_probs, list):
@@ -407,15 +536,15 @@ class RealTimeVisualizer:
             lines.append(f"Move Probabilities: {move_probs_str}")
         else:
             lines.append(f"Move Probabilities: {move_probs}")
-        
-        # Turn Probabilities  
+
+        # Turn Probabilities
         turn_probs = info.get('turn_probs', 'N/A')
         if isinstance(turn_probs, list):
             turn_probs_str = [round(x, 2) for x in turn_probs]
             lines.append(f"Turn Probabilities: {turn_probs_str}")
         else:
             lines.append(f"Turn Probabilities: {turn_probs}")
-        
+
         # Action Params
         action_params = info.get('action_params', 'N/A')
         if isinstance(action_params, list):
@@ -423,35 +552,39 @@ class RealTimeVisualizer:
             lines.append(f"Action Params: {action_params_str}")
         else:
             lines.append(f"Action Params: {action_params}")
-        
+
         # Value Estimation - 安全处理数值格式化
         value = info.get('value', 'N/A')
         if isinstance(value, (int, float)):
             lines.append(f"Value Estimation: {value:.2f}")
         else:
             lines.append("Value Estimation: N/A")
-        
+
+        # Ground-SAM状态
+        ground_sam_active = info.get('ground_sam_active', False)
+        lines.append(f"Ground-SAM: {'Active' if ground_sam_active else 'Inactive'}")
+
         # Reward - 现在能正确处理了
         reward = info.get('reward', 'N/A')
         if isinstance(reward, (int, float)):
             lines.append(f"Reward: {reward:.2f}")
         else:
             lines.append(f"Reward: {reward}")
-        
+
         # Step - 现在能正确处理了
         step = info.get('step', 'N/A')
         if isinstance(step, (int, float)):
             lines.append(f"Step: {step}")
         else:
             lines.append(f"Step: {step}")
-        
+
         # Episode - 现在能正确处理了
         episode = info.get('episode', 'N/A')
         if isinstance(episode, (int, float)):
             lines.append(f"Episode: {episode}")
         else:
             lines.append(f"Episode: {episode}")
-            
+
         # 其他文本
         lines.append(f"Move Action: {info.get('move_action', 'N/A')}")
         lines.append(f"Turn Action: {info.get('turn_action', 'N/A')}")
@@ -461,20 +594,20 @@ class RealTimeVisualizer:
         # 为文本绘制背景矩形
         overlay = image.copy()
         text_start_x = 10
-        
+
         # 计算文本区域的高度
         text_region_height = len(lines) * line_height + 20
         cv2.rectangle(overlay, (5, 10), (635, 10 + text_region_height), background_color, -1)
-        
+
         # 添加半透明效果
         alpha = 0.7
         image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
-        
+
         # 在图像上绘制每一行文本
         for i, line in enumerate(lines):
             y_pos = start_y + i * line_height
             cv2.putText(image, line, (text_start_x, y_pos), font, font_scale, text_color, text_thickness)
-        
+
         return image
  
     def update_agent_info(self, info):
@@ -498,22 +631,23 @@ class RealTimeVisualizer:
             while True:
                 # 非阻塞地从队列获取GUI更新请求
                 msg_type, *args = self.gui_queue.get_nowait()
-                
+
                 if msg_type == 'update_image':
-                    image, detections = args
-                    self._update_image_display(image, detections)
+                    image, detections, ground_sam_features = args
+                    self._update_image_display(image, detections, ground_sam_features)
                 elif msg_type == 'update_info':
                     info = args[0]
                     # 更新当前图像的信息显示
                     if self.current_image is not None:
-                        # 更新当前图像的信息显示
+                        # 保存最新的agent info
+                        self._last_agent_info = info
+                        # 直接更新显示,避免重复调用update_image_and_detections
                         img_with_info = self._add_agent_info_to_image(self.current_image.copy(), info)
-                        self.current_image = img_with_info
-                        # 重新显示图像以包含最新信息
-                        self.update_image_and_detections(self.current_image, self.detections)
+                        # 只更新canvas显示,不触发新的queue消息
+                        self._update_image_display_with_existing_features(img_with_info)
         except queue.Empty:
             pass  # 队列为空，正常情况
-        
+
         # 增加更新频率，改为每50ms更新一次（与原来相同，但如果之前较慢可调整）
         if self.root:
             self.root.after(50, self.process_gui_updates)  # 每50ms检查一次更新
@@ -525,40 +659,119 @@ class RealTimeVisualizer:
 
     def _draw_detections(self, image):
         """
-        在图像上绘制检测框
+        在图像上绘制YOLO检测框(使用绿色)
         """
         if self.detections:
             for detection in self.detections:
                 bbox = detection['bbox']
                 label = detection['label']
                 score = detection['score']
-                
+
                 # 转换边界框坐标为整数
                 x1, y1, x2, y2 = map(int, bbox)
-                
-                # 绘制矩形框
-                color = (0, 255, 0)  # 绿色框
+
+                # 绘制矩形框(绿色 - YOLO检测结果)
+                color = (0, 255, 0)
                 thickness = 2
                 cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
-                
+
                 # 添加标签和置信度文本
-                text = f"{label}: {score:.2f}"
+                text = f"YOLO {label}: {score:.2f}"
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
-                text_color = (255, 255, 255)  # 白色文字
+                text_color = (255, 255, 255)
                 text_thickness = 1
-                
+
                 # 获取文本框的尺寸
                 (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, text_thickness)
-                
+
                 # 绘制文本背景
-                cv2.rectangle(image, (x1, y1 - text_height - 10), 
+                cv2.rectangle(image, (x1, y1 - text_height - 10),
                             (x1 + text_width, y1), color, -1)
-                
+
                 # 在图像上绘制文本
-                cv2.putText(image, text, (x1, y1 - 5), font, 
+                cv2.putText(image, text, (x1, y1 - 5), font,
                            font_scale, text_color, text_thickness)
-        
+
+        return image
+
+    def _draw_ground_sam_features(self, image, features):
+        """
+        在图像上绘制Ground-SAM特征
+        Args:
+            image: 输入图像
+            features: Ground-SAM特征字典
+        Returns:
+            绘制后的图像
+        """
+        if features is None:
+            return image
+
+        try:
+            # 创建半透明叠加层
+            overlay = image.copy()
+
+            # 不绘制Grounding DINO检测框，只绘制SAM掩码
+            # 绘制SAM分割掩码(使用半透明叠加)
+            if 'mask_features' in features and features['mask_features']:
+                mask_features = features['mask_features']
+
+                import logging
+                logger = logging.getLogger('ppo_agent_logger')
+                logger.info(f"准备绘制 {len(mask_features)} 个SAM分割掩码")
+
+                import random
+                mask_drawn = 0
+                for i, mask_info in enumerate(mask_features):
+                    if isinstance(mask_info, dict) and 'mask' in mask_info:
+                        mask = mask_info['mask']
+
+                        # 转换为numpy数组
+                        if torch.is_tensor(mask):
+                            mask = mask.cpu().numpy()
+
+                        # 确保mask是二维的
+                        if mask.ndim == 3:
+                            mask = mask.squeeze()
+
+                        logger.debug(f"掩码 {i}: 形状={mask.shape}, dtype={mask.dtype}, min={mask.min():.3f}, max={mask.max():.3f}")
+
+                        # 为每个掩码生成随机颜色（使用H色彩空间，保持高亮度）
+                        hue = random.randint(0, 179)
+                        color = cv2.cvtColor(np.uint8([[[hue, 200, 200]]]), cv2.COLOR_HSV2BGR)[0][0]
+
+                        # 应用掩码到overlay(半透明)
+                        mask_bool = mask.astype(bool)
+                        true_count = mask_bool.sum()
+                        if true_count > 0:  # 确保掩码有效且有像素
+                            logger.debug(f"掩码 {i} 有 {true_count} 个有效像素")
+                            # 使用numpy向量化操作进行颜色混合
+                            overlay[mask_bool, 0] = (overlay[mask_bool, 0] * 0.5 + color[0] * 0.5).astype(np.uint8)
+                            overlay[mask_bool, 1] = (overlay[mask_bool, 1] * 0.5 + color[1] * 0.5).astype(np.uint8)
+                            overlay[mask_bool, 2] = (overlay[mask_bool, 2] * 0.5 + color[2] * 0.5).astype(np.uint8)
+
+                            mask_drawn += 1
+                        else:
+                            logger.warning(f"掩码 {i} 没有有效像素!")
+
+                logger.info(f"实际绘制了 {mask_drawn}/{len(mask_features)} 个掩码")
+            else:
+                import logging
+                logger = logging.getLogger('ppo_agent_logger')
+                logger.debug("features字典中没有mask_features键")
+
+            # 叠加原始图像
+            alpha = 0.7
+            image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+
+        except Exception as e:
+            # 如果绘制失败,不影响主流程
+            import logging
+            logger = logging.getLogger('ppo_agent_logger')
+            logger.error(f"绘制Ground-SAM特征时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
         return image
 
     def run(self):
@@ -572,27 +785,30 @@ class RealTimeVisualizer:
 
 def add_visualization_to_environment(TargetSearchEnvironment, visualizer):
     """
-    为环境类添加可视化功能
+    为环境类添加可视化功能(包括Ground-SAM特征提取)
     """
     original_step = TargetSearchEnvironment.step
     original_reset = TargetSearchEnvironment.reset
-    
+
     def step_with_visualization(self, move_action, turn_action, move_forward_step=2, turn_angle=30):
         # 获取当前状态
         current_state = self.capture_screen()
-        
+
         # 检测目标
         detections = self.detect_target(current_state)
-        
-        # 更新可视化
-        visualizer.update_image_and_detections(current_state, detections)
-        
+
+        # 使用已提取的Ground-SAM特征（在训练循环中提取）
+        ground_sam_features = getattr(self, 'last_ground_sam_features', None)
+
+        # 更新可视化(包含Ground-SAM特征)
+        visualizer.update_image_and_detections(current_state, detections, ground_sam_features)
+
         # 执行原始step
         result = original_step(self, move_action, turn_action, move_forward_step, turn_angle)
-        
+
         # 新状态
         new_state, reward, done, new_detections = result
-        
+
         # 更新可视化信息 - 确保传递step和episode信息
         visualizer.update_agent_info({
             'step': self.step_count,
@@ -603,14 +819,15 @@ def add_visualization_to_environment(TargetSearchEnvironment, visualizer):
             'move_forward_step': move_forward_step,
             'turn_angle': turn_angle,
             'detections': len(new_detections),
+            'ground_sam_active': ground_sam_features is not None,
             'done': done
         })
-        
+
         return result
-    
+
     def reset_with_visualization(self):
         result = original_reset(self)
-        
+
         # 更新可视化
         visualizer.update_image_and_detections(result, [])
         visualizer.update_agent_info({
@@ -618,9 +835,9 @@ def add_visualization_to_environment(TargetSearchEnvironment, visualizer):
             'episode': getattr(self, '_current_episode', 0),  # 确保使用_current_episode
             'reset': True
         })
-        
+
         return result
-    
+
     # 替换环境的方法
     TargetSearchEnvironment.step = step_with_visualization
     TargetSearchEnvironment.reset = reset_with_visualization
@@ -732,6 +949,14 @@ class TargetSearchEnvironment:
         
         # 添加存储最近检测图像的队列 - 移到这里，确保在调用检测相关方法前已初始化
         self.recent_detection_images = deque(maxlen=5)
+
+        # 添加用于检查图像变化的变量
+        self.previous_image_hash = None
+        self.image_change_counter = 0
+        self.total_image_checks = 0
+
+        # 存储最近的Ground-SAM特征（用于保存图片）
+        self.last_ground_sam_features = None
         
         self.yolo_model = self._load_yolo_model()
         self._warm_up_detection_model()
@@ -742,6 +967,7 @@ class TargetSearchEnvironment:
         
         # 动作历史记录
         self.action_history = deque(maxlen=10)     
+
     def _load_yolo_model(self):
         """
         加载YOLO模型
@@ -789,17 +1015,44 @@ class TargetSearchEnvironment:
                 screenshot = Image.open("sifu_window_capture.png")
                 screenshot = np.array(screenshot)
                 screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+                
+                # 检查图像是否与上一帧相同
+                current_hash = hash(screenshot.tobytes())
+                if self.previous_image_hash is not None:
+                    self.total_image_checks += 1
+                    if current_hash != self.previous_image_hash:
+                        self.image_change_counter += 1
+                
+                self.previous_image_hash = current_hash
                 return screenshot
             else:
                 self.logger.warning("未找到包含 'sifu' 的窗口，使用全屏截图")
                 screenshot = pyautogui.screenshot()
                 screenshot = np.array(screenshot)
                 screenshot = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
+                
+                # 检查图像是否与上一帧相同
+                current_hash = hash(screenshot.tobytes())
+                if self.previous_image_hash is not None:
+                    self.total_image_checks += 1
+                    if current_hash != self.previous_image_hash:
+                        self.image_change_counter += 1
+                        
+                self.previous_image_hash = current_hash
                 return screenshot
         except ImportError:
             self.logger.warning("截图功能不可用，使用模拟图片")
             # 使用配置文件中的图像尺寸
-            return np.zeros((CONFIG['IMAGE_HEIGHT'], CONFIG['IMAGE_WIDTH'], 3), dtype=np.uint8)
+            sim_img = np.zeros((CONFIG['IMAGE_HEIGHT'], CONFIG['IMAGE_WIDTH'], 3), dtype=np.uint8)
+            # 检查图像是否与上一帧相同
+            current_hash = hash(sim_img.tobytes())
+            if self.previous_image_hash is not None:
+                self.total_image_checks += 1
+                if current_hash != self.previous_image_hash:
+                    self.image_change_counter += 1
+                    
+            self.previous_image_hash = current_hash
+            return sim_img
 
     def detect_target(self, image):
         """
@@ -996,22 +1249,20 @@ class TargetSearchEnvironment:
         
         if pre_climb_detected:
             self.logger.info(f"动作执行前已检测到符合条件的climb类别，立即终止")
-            
-            # 保存带识别框的图片
-           
+
             # 完成奖励
             base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
             speed_bonus = CONFIG.get('QUICK_COMPLETION_BONUS_FACTOR', 8) * (self.max_steps - self.step_count)
             reward = base_completion_reward + speed_bonus
-            
+
             new_area = self._get_max_detection_area(pre_action_detections)
             self.last_area = new_area
             self.last_detection_result = pre_action_detections
             self.step_count += 1
-            
+
             # 关键：执行游戏重置操作
             self.reset_to_origin()
-            
+
             return pre_action_state, reward, True, pre_action_detections
         
         # 执行移动动作
@@ -1058,9 +1309,15 @@ class TargetSearchEnvironment:
         
         # 如果检测到符合条件的climb，给予额外奖励
         if climb_detected:
-            # 保存带识别框的图片
-            
-            
+            # 保存带Ground-SAM掩码的图片
+            if CONFIG.get('SAVE_DETECTION_IMAGES', False) and self.last_ground_sam_features is not None:
+                self._save_detection_image_with_bounding_boxes(
+                    new_state,
+                    detection_results,
+                    self.last_ground_sam_features,
+                    prefix=f"episode_{getattr(self, '_current_episode', 0)}_step_{self.step_count}_climb"
+                )
+
             # 基础完成奖励
             base_completion_reward = CONFIG.get('BASE_COMPLETION_REWARD', 250)
             
@@ -1112,82 +1369,80 @@ class TargetSearchEnvironment:
         
         return total_reward, new_area
 
-    def _save_detection_image_with_bounding_boxes(self, image, detection_results, prefix="detection"):
+    def _save_detection_image_with_bounding_boxes(self, image, detection_results, ground_sam_features=None, prefix="detection"):
         """
-        保存带检测框的图像，并保留最近5个
+        保存带Ground-SAM掩码的图像（不包含检测框），并保留最近5个
         """
         try:
             # 复制图像以避免修改原始图像
-            img_with_boxes = image.copy()
-            
-            # 绘制检测框
-            for detection in detection_results:
-                bbox = detection['bbox']
-                label = detection['label']
-                score = detection['score']
-                
-                # 转换边界框坐标为整数
-                x1, y1, x2, y2 = map(int, bbox)
-                
-                # 绘制矩形框
-                color = (0, 255, 0)  # 绿色框
-                thickness = 2
-                cv2.rectangle(img_with_boxes, (x1, y1), (x2, y2), color, thickness)
-                
-                # 添加标签和置信度文本
-                text = f"{label}: {score:.2f}"
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.5
-                text_color = (255, 255, 255)  # 白色文字
-                text_thickness = 1
-                
-                # 获取文本框的尺寸
-                (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, text_thickness)
-                
-                # 绘制文本背景
-                cv2.rectangle(img_with_boxes, (x1, y1 - text_height - 10), 
-                            (x1 + text_width, y1), color, -1)
-                
-                # 在图像上绘制文本
-                cv2.putText(img_with_boxes, text, (x1, y1 - 5), font, 
-                        font_scale, text_color, text_thickness)
-            
+            img_with_masks = image.copy()
+
+            # 如果有Ground-SAM特征，绘制掩码
+            if ground_sam_features is not None and 'mask_features' in ground_sam_features:
+                mask_features = ground_sam_features['mask_features']
+
+                # 创建半透明叠加层
+                overlay = img_with_masks.copy()
+
+                for i, mask_info in enumerate(mask_features):
+                    if isinstance(mask_info, dict) and 'mask' in mask_info:
+                        mask = mask_info['mask']
+
+                        # 转换为numpy数组
+                        if torch.is_tensor(mask):
+                            mask = mask.cpu().numpy()
+
+                        # 确保mask是二维的
+                        if mask.ndim == 3:
+                            mask = mask.squeeze()
+
+                        # 为每个掩码生成随机颜色（使用H色彩空间，保持高亮度）
+                        import random
+                        hue = random.randint(0, 179)
+                        color = cv2.cvtColor(np.uint8([[[hue, 200, 200]]]), cv2.COLOR_HSV2BGR)[0][0]
+
+                        # 应用掩码到overlay(半透明)
+                        mask_bool = mask.astype(bool)
+                        true_count = mask_bool.sum()
+                        if true_count > 0:
+                            # 使用numpy向量化操作进行颜色混合
+                            overlay[mask_bool, 0] = (overlay[mask_bool, 0] * 0.5 + color[0] * 0.5).astype(np.uint8)
+                            overlay[mask_bool, 1] = (overlay[mask_bool, 1] * 0.5 + color[1] * 0.5).astype(np.uint8)
+                            overlay[mask_bool, 2] = (overlay[mask_bool, 2] * 0.5 + color[2] * 0.5).astype(np.uint8)
+
+                # 叠加原始图像
+                img_with_masks = cv2.addWeighted(overlay, 0.7, img_with_masks, 0.3, 0)
+
             # 生成文件名
             timestamp = int(time.time() * 1000)  # 使用毫秒时间戳
-            filename = f"{prefix}_detection_{timestamp}.png"
-            
+            filename = f"{prefix}_sam_masks_{timestamp}.png"
+
             # 确定保存路径
             save_dir = Path(__file__).parent / "detection_images"
             if not save_dir.exists():
                 save_dir.mkdir(parents=True, exist_ok=True)
-            
+
             filepath = save_dir / filename
-            
+
             # 保存图像
-            success = cv2.imwrite(str(filepath), img_with_boxes)
-            
+            success = cv2.imwrite(str(filepath), img_with_masks)
+
             if success:
-                
-                
                 # 将文件路径添加到最近检测图像队列
                 self.recent_detection_images.append(str(filepath))
             else:
                 self.logger.error(f"保存检测结果图像失败: {filepath}")
-                
-        except Exception as e:
-            self.logger.error(f"保存带检测框图像时出错: {e}")
 
-    def _save_detection_image_with_bounding_boxes(self, image, detection_results, prefix="detection"):
-        """
-        保存带检测框的图像，并保留最近5个
-        """
-        pass
+        except Exception as e:
+            self.logger.error(f"保存带Ground-SAM掩码图像时出错: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def get_recent_detection_images(self):
         """
         获取最近5个检测图像的路径
         """
-        return []
+        return list(self.recent_detection_images)
 
     def reset(self):
         """
@@ -1198,15 +1453,20 @@ class TargetSearchEnvironment:
         self.last_area = 0
         self.last_detection_result = None
         self.action_history.clear()
+        
+        # 输出图像变化统计信息
+        if self.total_image_checks > 0:
+            change_rate = self.image_change_counter / self.total_image_checks
+            self.logger.info(f"图像变化统计: {self.image_change_counter}/{self.total_image_checks} ({change_rate:.2%})")
+        
         initial_state = self.capture_screen()
-
         return initial_state
 
 class PPOAgent:
     """
-    PPO智能体
+    PPO智能体(支持Ground-SAM)
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim):
+    def __init__(self, state_dim, move_action_dim, turn_action_dim, use_ground_sam=None):
         config = CONFIG
         
         self.lr = config['LEARNING_RATE']
@@ -1215,24 +1475,58 @@ class PPOAgent:
         self.K_epochs = config['K_EPOCHS']
         self.eps_clip = config['EPS_CLIP']
         
+        # 确定是否使用Ground-SAM
+        if use_ground_sam is None:
+            use_ground_sam = config.get('USE_GROUND_SAM', False)
+        
+        self.use_ground_sam = use_ground_sam and GROUND_SAM_AVAILABLE
+        
         # 添加logger
         self.logger = setup_logging()
         
+        # 如果使用Ground-SAM,先初始化全局提取器
+        if self.use_ground_sam:
+            get_global_ground_sam_extractor()
+            self.logger.info("PPO智能体已启用Ground-SAM特征提取")
+        
         # Create policy networks
         self.policy = PolicyNetwork(
-            state_dim, move_action_dim, turn_action_dim
+            state_dim, move_action_dim, turn_action_dim, use_ground_sam=self.use_ground_sam
         )
-        self.optimizer = torch.optim.Adam(
-            self.policy.parameters(), 
-            lr=self.lr, 
-            betas=self.betas
-        )
+        
+        # 优化器:只优化可训练参数,不优化冻结的SAM
+        if self.use_ground_sam and hasattr(self.policy, 'sam_feature_encoder'):
+            # 如果使用Ground-SAM,优化编码器和策略网络
+            trainable_params = []
+            trainable_params.extend(self.policy.sam_feature_encoder.parameters())
+            trainable_params.extend(self.policy.move_actor.parameters())
+            trainable_params.extend(self.policy.turn_actor.parameters())
+            trainable_params.extend(self.policy.action_param_head.parameters())
+            trainable_params.extend(self.policy.critic.parameters())
+            
+            self.optimizer = torch.optim.Adam(
+                trainable_params,
+                lr=self.lr,
+                betas=self.betas
+            )
+        else:
+            # 不使用Ground-SAM,优化所有参数
+            self.optimizer = torch.optim.Adam(
+                self.policy.parameters(),
+                lr=self.lr,
+                betas=self.betas
+            )
+        
         self.policy_old = PolicyNetwork(
-            state_dim, move_action_dim, turn_action_dim
+            state_dim, move_action_dim, turn_action_dim, use_ground_sam=self.use_ground_sam
         )
         self.policy_old.load_state_dict(self.policy.state_dict())
         
         self.MseLoss = nn.MSELoss()
+        
+        # 添加梯度检查相关变量
+        self.gradient_norms = []
+        self.parameter_norms = []
 
     def act(self, state, memory, return_debug_info=False):
         # 预处理状态
@@ -1333,11 +1627,24 @@ class PPOAgent:
 
             # 计算优势 - 使用广义优势估计(GAE)以获得更好的性能
             advantages = rewards - state_vals.squeeze().detach()
-
-            # PPO损失
+            
+            # 添加重要性采样比率的裁剪，但对负优势使用不同的处理方式
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-            actor_loss = -torch.min(surr1, surr2).mean()
+            
+            # 对于负优势（即表现低于基线的情况），我们不希望过度惩罚
+            # 使用不同的裁剪策略来避免过度降低好的行为的概率
+            positive_advantages = torch.where(advantages >= 0, surr1, surr2)
+            negative_advantages = torch.where(advantages < 0, surr1, surr2)  # 不对负优势进行裁剪
+            
+            # 合并正负优势的处理
+            actor_loss = -torch.min(positive_advantages, surr2).mean()
+            
+            # 对于负优势，我们仍然需要考虑它，但不应用裁剪
+            actor_loss_negative = -negative_advantages.mean()
+            
+            # 组合损失，对负优势的影响进行平衡
+            actor_loss = actor_loss + 0.5 * actor_loss_negative
 
             # 价值损失
             critic_loss = self.MseLoss(state_vals.squeeze(), rewards)
@@ -1351,8 +1658,24 @@ class PPOAgent:
             loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy_loss
 
             # 反向传播
+
+
             self.optimizer.zero_grad()
             loss.backward()
+            
+            # 检查梯度
+            total_norm = 0
+            param_norm = 0
+            for p in self.policy.parameters():
+                if p.grad is not None:
+                    param_norm += p.norm(2).item() ** 2
+                    total_norm += p.grad.norm(2).item() ** 2
+            
+            param_norm = param_norm ** 0.5
+            total_norm = total_norm ** 0.5
+            
+            self.gradient_norms.append(total_norm)
+            self.parameter_norms.append(param_norm)
             
             # 梯度裁剪以稳定训练
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
@@ -1409,6 +1732,14 @@ class PPOAgent:
             self.policy_old.load_state_dict(checkpoint['policy_old_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_episode = checkpoint.get('episode', 0)
+            
+            # 输出加载检查点时的参数统计信息
+            param_norm = 0
+            for p in self.policy.parameters():
+                param_norm += p.norm(2).item() ** 2
+            param_norm = param_norm ** 0.5
+            self.logger.info(f"加载检查点时参数范数: {param_norm:.4f}")
+            
             self.logger.info(f"模型检查点已加载，从第 {start_episode} 轮开始继续训练")
             return start_episode + 1
         else:
@@ -1426,6 +1757,8 @@ def find_latest_checkpoint(model_path):
     # 查找所有相关的检查点文件
     checkpoint_pattern = re.compile(rf'{re.escape(model_base_name)}_checkpoint_ep_(\d+)\.pth$')
     found_checkpoints = []
+
+
     
     if os.path.exists(model_dir):
         for file in os.listdir(model_dir):
@@ -1635,6 +1968,13 @@ def run_episode(env, ppo_agent, visualizer, episode_num, total_episodes, trainin
     if training_mode and len(episode_memory.rewards) > 0:
         # 更新智能体
         ppo_agent.update(episode_memory)
+        
+        # 输出梯度和参数范数信息
+        if ppo_agent.gradient_norms:
+            avg_grad_norm = sum(ppo_agent.gradient_norms[-10:]) / len(ppo_agent.gradient_norms[-10:])
+            avg_param_norm = sum(ppo_agent.parameter_norms[-10:]) / len(ppo_agent.parameter_norms[-10:])
+            
+            ppo_agent.logger.info(f"梯度范数: {avg_grad_norm:.4f}, 参数范数: {avg_param_norm:.4f}")
     
     # 获取最近的检测图像（如果需要的话）
     recent_detection_images = getattr(env, 'get_recent_detection_images', lambda: [])()
@@ -1966,7 +2306,42 @@ def train_with_visualization():
         total_reward = 0
         
         for t in range(env.max_steps):
-            # 智能体执行动作
+            # 先提取Ground-SAM特征（如果启用）
+            ground_sam_features = None
+            if CONFIG.get('USE_GROUND_SAM', False) and GROUND_SAM_AVAILABLE:
+                try:
+                    extractor = get_global_ground_sam_extractor()
+                    if extractor is not None:
+                        # 将state转换为numpy图像
+                        if isinstance(state, torch.Tensor):
+                            state_np = state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                        else:
+                            state_np = state
+
+                        # 提取Ground-SAM特征
+                        ground_sam_features = extractor.extract_features(
+                            state_np,
+                            use_auto_segmentation=True
+                        )
+
+                        # 存储到环境中，用于后续保存图片
+                        env.last_ground_sam_features = ground_sam_features
+
+                        logger = logging.getLogger('ppo_agent_logger')
+                        logger.info(f"步骤 {t}: 提取Ground-SAM特征完成")
+                        if ground_sam_features:
+                            logger.info(f"Ground-SAM特征键: {list(ground_sam_features.keys())}")
+                            if 'auto_masks' in ground_sam_features and ground_sam_features['auto_masks']:
+                                logger.info(f"自动分割检测到 {len(ground_sam_features['auto_masks'])} 个对象")
+                            if 'mask_features' in ground_sam_features and ground_sam_features['mask_features']:
+                                logger.info(f"提取到 {len(ground_sam_features['mask_features'])} 个掩码")
+                except Exception as e:
+                    logger = logging.getLogger('ppo_agent_logger')
+                    logger.error(f"Ground-SAM特征提取失败: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
+            # 智能体执行动作（使用Ground-SAM特征）
             move_action, turn_action, move_step, turn_angle, debug_info = agent.act(
                 state, memory, return_debug_info=True
             )
