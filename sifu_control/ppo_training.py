@@ -1,3 +1,32 @@
+"""
+PPO强化学习智能体 - 集成Ground-SAM特征提取
+
+本模块实现了基于近端策略优化(PPO)的强化学习智能体,用于Sifu游戏的自动寻路任务。
+集成了Ground-SAM视觉特征提取器,支持在训练过程中进行SAM掩码可视化。
+
+主要功能:
+- PPO算法实现: 包含Actor-Critic网络、经验回放、策略更新
+- Ground-SAM集成: 使用冻结的SAM和Grounding DINO模型进行特征提取
+- SAM掩码可视化: 支持在训练过程中自动保存SAM分割结果
+- 多环境支持: 支持Sifu游戏环境和测试环境
+
+SAM掩码可视化使用方法:
+    在训练代码中调用_extract_sam_embedding时启用可视化:
+
+    sam_embedding = self._extract_sam_embedding(
+        image_np,
+        visualize_mask=True,                      # 启用掩码可视化
+        save_path='./output/sam_masks.png'       # 保存路径
+    )
+
+    独立演示SAM掩码可视化:
+    python demo_show_sam_masks.py --image your_image.jpg --output result.png
+
+详细文档:
+- Ground-SAM: ../grounding_dino/GROUND_SAM_README.md
+- SAM掩码: ../grounding_dino/SAM_MASKS_README.md
+"""
+
 import os
 import sys
 import time
@@ -175,7 +204,9 @@ class PolicyNetwork(nn.Module):
     """
     def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256, use_ground_sam=False):
         super(PolicyNetwork, self).__init__()
-        
+
+        self.sam_mask_counter = 0  # SAM掩码保存计数器
+
         self.use_ground_sam = use_ground_sam and GROUND_SAM_AVAILABLE
         
         # 特征维度
@@ -260,14 +291,16 @@ class PolicyNetwork(nn.Module):
                     batch_size = state.shape[0]
                     sam_features_list = []
                     for i in range(batch_size):
-                        image_np = state[i].permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                        # 将归一化的[0,1]范围转换回[0,255]的uint8格式
+                        image_np = (state[i].permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
                         sam_embedding = self._extract_sam_embedding(image_np)
                         sam_encoded = self.sam_feature_encoder(sam_embedding)
                         sam_features_list.append(sam_encoded)
                     features = torch.stack(sam_features_list)
                 else:
                     # 单张图像
-                    image_np = state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                    # 将归一化的[0,1]范围转换回[0,255]的uint8格式
+                    image_np = (state.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
                     sam_embedding = self._extract_sam_embedding(image_np)
                     features = self.sam_feature_encoder(sam_embedding)
             except Exception as e:
@@ -307,13 +340,22 @@ class PolicyNetwork(nn.Module):
                 'features_shape': features.shape,
                 'using_ground_sam': self.has_ground_sam
             }
-            
-            # 打印模型输出信息
-            self.logger.info(f"Move: {[round(float(x), 2) for x in debug_info['move_logits'][0]]}")
-            self.logger.info(f"Turn: {[round(float(x), 2) for x in debug_info['turn_logits'][0]]}")
-            self.logger.info(f"参数: {[round(float(x), 2) for x in debug_info['action_params'][0]]}")
-            self.logger.info(f"价值: {round(float(debug_info['value'][0][0]), 2)}")
-            
+
+            # 安全地打印模型输出信息(处理不同维度的情况)
+            try:
+                move_logits_flat = debug_info['move_logits'].flatten()
+                turn_logits_flat = debug_info['turn_logits'].flatten()
+                action_params_flat = debug_info['action_params'].flatten()
+                value_flat = debug_info['value'].flatten()
+
+                # 只打印前5个值以避免过多输出
+                self.logger.info(f"Move: {[round(float(x), 2) for x in move_logits_flat[:5]]}")
+                self.logger.info(f"Turn: {[round(float(x), 2) for x in turn_logits_flat[:5]]}")
+                self.logger.info(f"参数: {[round(float(x), 2) for x in action_params_flat[:5]]}")
+                self.logger.info(f"价值: {round(float(value_flat[0]), 2) if len(value_flat) > 0 else 'N/A'}")
+            except Exception as e:
+                self.logger.warning(f"无法打印调试信息: {e}")
+
             return (
                 F.softmax(move_logits, dim=-1),
                 F.softmax(turn_logits, dim=-1),
@@ -329,23 +371,158 @@ class PolicyNetwork(nn.Module):
                 value
             )
     
-    def _extract_sam_embedding(self, image_np):
+    def _extract_sam_embedding(self, image_np, visualize_mask=True, save_path=None):
         """
         提取SAM图像嵌入(冻结的预训练模型)
         Args:
             image_np: numpy数组图像 (H, W, 3)
+            visualize_mask: 是否可视化SAM掩码
+            save_path: 掩码图像保存路径(如果为None则自动生成路径)
         Returns:
             SAM嵌入张量
         """
         extractor = get_global_ground_sam_extractor()
         if extractor is None:
             raise ValueError("Ground-SAM提取器未初始化")
-        
-        with torch.no_grad():  # SAM是冻结的,不计算梯度
-            image_features = extractor.sam_backbone.extract_image_features(image_np)
-            sam_embedding = image_features['image_embedding']
-        
-        return sam_embedding
+
+        logger = setup_logging()
+        logger.info(f"开始提取SAM特征, 图像形状: {image_np.shape}, 数据类型: {image_np.dtype}, 值范围: [{image_np.min()}, {image_np.max()}]")
+
+        try:
+            with torch.no_grad():  # SAM是冻结的,不计算梯度
+                # 可视化掩码
+                if visualize_mask:
+                    try:
+                        logger.info("开始SAM自动分割...")
+                        masks = extractor.sam_backbone.automatic_segmentation(image_np)
+                        logger.info(f"SAM自动分割完成,检测到 {len(masks)} 个对象")
+
+                        # 自动生成保存路径
+                        if save_path is None and hasattr(self, 'sam_mask_counter'):
+                            # 创建输出目录
+                            output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sam_masks_output')
+                            os.makedirs(output_dir, exist_ok=True)
+
+                            # 生成文件名
+                            save_path = os.path.join(output_dir, f'sam_mask_{self.sam_mask_counter:05d}.png')
+                            self.sam_mask_counter += 1
+
+                        self._visualize_sam_masks(image_np, masks, save_path)
+                    except Exception as mask_error:
+                        logger.error(f"SAM掩码生成失败: {type(mask_error).__name__}: {mask_error}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+
+                image_features = extractor.sam_backbone.extract_image_features(image_np)
+                sam_embedding = image_features['image_embedding']
+
+                logger.info(f"SAM特征提取成功, embedding形状: {sam_embedding.shape}, 设备: {sam_embedding.device}")
+
+                # 确保sam_embedding在正确的设备上(与sam_feature_encoder一致)
+                if hasattr(self, 'sam_feature_encoder'):
+                    device = next(self.sam_feature_encoder.parameters()).device
+                    sam_embedding = sam_embedding.to(device)
+                    logger.info(f"SAM特征已移动到设备: {device}")
+
+                return sam_embedding
+        except Exception as e:
+            logger.error(f"SAM特征提取异常: {type(e).__name__}: {e}")
+            logger.error(f"提取器设备: {extractor.device if hasattr(extractor, 'device') else '未知'}")
+            logger.error(f"编码器设备: {next(self.sam_feature_encoder.parameters()).device if hasattr(self, 'sam_feature_encoder') else '未知'}")
+            raise
+
+    def _visualize_sam_masks(self, image, masks, save_path=None):
+        """
+        可视化SAM自动分割的掩码
+        Args:
+            image: 原始图像 (H, W, 3) numpy数组
+            masks: SAM生成的掩码列表
+            save_path: 保存路径,如果为None则不保存
+        """
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+
+        logger = setup_logging()
+        logger.info(f"开始可视化SAM掩码, 掩码数量: {len(masks)}, 保存路径: {save_path}")
+
+        try:
+            # 设置matplotlib使用非交互式后端,避免弹出窗口
+            plt.switch_backend('Agg')
+
+            # 设置中文字体(避免警告)
+            try:
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+            except:
+                pass
+
+            # 创建图像副本用于绘制
+            vis_image = image.copy()
+
+            # 按面积排序掩码
+            sorted_masks = sorted(masks, key=lambda x: x['area'], reverse=True)
+
+            # 只显示前N个掩码以避免图像过于拥挤
+            max_masks = min(len(sorted_masks), 20)
+
+            # 创建图形
+            fig, ax = plt.subplots(1, figsize=(12, 12))
+            ax.imshow(vis_image)
+
+            # 为每个掩码分配不同的颜色
+            colors = plt.cm.tab20(np.linspace(0, 1, max_masks))
+
+            for idx in range(max_masks):
+                mask_data = sorted_masks[idx]
+                mask = mask_data['segmentation']
+
+                # 获取颜色
+                color = colors[idx]
+
+                # 创建半透明掩码
+                colored_mask = np.zeros((mask.shape[0], mask.shape[1], 4))
+                colored_mask[:, :, :3] = color[:3]
+                colored_mask[:, :, 3] = mask * 0.4  # 透明度
+
+                ax.imshow(colored_mask)
+
+                # 绘制边界框
+                x, y, w, h = mask_data['bbox']
+                rect = patches.Rectangle(
+                    (x, y), w, h,
+                    linewidth=2,
+                    edgecolor=color[:3],
+                    facecolor='none'
+                )
+                ax.add_patch(rect)
+
+                # 显示掩码信息(使用英文避免中文字体问题)
+                info_text = f"#{idx}: area={mask_data['area']:.0f}, iou={mask_data['predicted_iou']:.2f}"
+                ax.text(x, y - 5, info_text, color=color[:3], fontsize=8,
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
+
+            # 使用英文标题避免中文字体问题
+            ax.set_title(f"SAM Auto-Segmentation (Total: {len(masks)} objects, Showing: {max_masks})", fontsize=14)
+            ax.axis('off')
+
+            # 调整布局
+            plt.tight_layout()
+
+            # 保存图像
+            if save_path:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                plt.savefig(save_path, dpi=100, bbox_inches='tight', pad_inches=0.1)
+                logger.info(f"SAM掩码可视化已保存到: {save_path}")
+            else:
+                logger.info("未指定保存路径,跳过保存")
+
+            # 关闭图形以释放内存
+            plt.close(fig)
+
+        except Exception as e:
+            logger.error(f"可视化SAM掩码失败: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
 
 class Memory:
@@ -460,12 +637,14 @@ class RealTimeVisualizer:
             ground_sam_features: Ground-SAM特征(可选)
         """
         if image is not None:
-            # 绘制检测框
-            display_img = self._draw_detections(image.copy())
-
-            # 绘制Ground-SAM特征
+            # 先绘制SAM掩码(重新叠加原始图像)
             if ground_sam_features is not None:
-                display_img = self._draw_ground_sam_features(display_img, ground_sam_features)
+                display_img = self._draw_ground_sam_features(image.copy(), ground_sam_features, reblend_original=True)
+            else:
+                display_img = image.copy()
+
+            # 再绘制YOLO检测框(在掩码之上)
+            display_img = self._draw_detections(display_img)
 
             # 如果有智能体信息，也绘制在图像上
             if hasattr(self, '_last_agent_info') and self._last_agent_info:
@@ -695,12 +874,13 @@ class RealTimeVisualizer:
 
         return image
 
-    def _draw_ground_sam_features(self, image, features):
+    def _draw_ground_sam_features(self, image, features, reblend_original=False):
         """
         在图像上绘制Ground-SAM特征
         Args:
             image: 输入图像
             features: Ground-SAM特征字典
+            reblend_original: 是否重新叠加原始图像(如果为False,则在已有图像上叠加掩码)
         Returns:
             绘制后的图像
         """
@@ -736,19 +916,19 @@ class RealTimeVisualizer:
 
                         logger.debug(f"掩码 {i}: 形状={mask.shape}, dtype={mask.dtype}, min={mask.min():.3f}, max={mask.max():.3f}")
 
-                        # 为每个掩码生成随机颜色（使用H色彩空间，保持高亮度）
+                        # 为每个掩码生成随机颜色（使用H色彩空间，保持高亮度和高饱和度）
                         hue = random.randint(0, 179)
-                        color = cv2.cvtColor(np.uint8([[[hue, 200, 200]]]), cv2.COLOR_HSV2BGR)[0][0]
+                        color = cv2.cvtColor(np.uint8([[[hue, 200, 255]]]), cv2.COLOR_HSV2BGR)[0][0]
 
-                        # 应用掩码到overlay(半透明)
+                        # 应用掩码到overlay(增加掩码颜色的权重)
                         mask_bool = mask.astype(bool)
                         true_count = mask_bool.sum()
                         if true_count > 0:  # 确保掩码有效且有像素
                             logger.debug(f"掩码 {i} 有 {true_count} 个有效像素")
-                            # 使用numpy向量化操作进行颜色混合
-                            overlay[mask_bool, 0] = (overlay[mask_bool, 0] * 0.5 + color[0] * 0.5).astype(np.uint8)
-                            overlay[mask_bool, 1] = (overlay[mask_bool, 1] * 0.5 + color[1] * 0.5).astype(np.uint8)
-                            overlay[mask_bool, 2] = (overlay[mask_bool, 2] * 0.5 + color[2] * 0.5).astype(np.uint8)
+                            # 使用numpy向量化操作进行颜色混合(让掩码颜色更明显)
+                            overlay[mask_bool, 0] = (overlay[mask_bool, 0] * 0.3 + color[0] * 0.7).astype(np.uint8)
+                            overlay[mask_bool, 1] = (overlay[mask_bool, 1] * 0.3 + color[1] * 0.7).astype(np.uint8)
+                            overlay[mask_bool, 2] = (overlay[mask_bool, 2] * 0.3 + color[2] * 0.7).astype(np.uint8)
 
                             mask_drawn += 1
                         else:
@@ -760,9 +940,14 @@ class RealTimeVisualizer:
                 logger = logging.getLogger('ppo_agent_logger')
                 logger.debug("features字典中没有mask_features键")
 
-            # 叠加原始图像
-            alpha = 0.7
-            image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+            # 根据参数决定是否重新叠加原始图像
+            if reblend_original:
+                # 叠加原始图像(增加掩码透明度,让掩码更明显)
+                alpha = 0.6  # 增加掩码的透明度(0.6 + 0.4)
+                image = cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
+            else:
+                # 不重新叠加,直接返回overlay(这样可以保留YOLO检测结果)
+                image = overlay
 
         except Exception as e:
             # 如果绘制失败,不影响主流程
@@ -797,8 +982,31 @@ def add_visualization_to_environment(TargetSearchEnvironment, visualizer):
         # 检测目标
         detections = self.detect_target(current_state)
 
-        # 使用已提取的Ground-SAM特征（在训练循环中提取）
-        ground_sam_features = getattr(self, 'last_ground_sam_features', None)
+        # 提取Ground-SAM特征用于可视化
+        ground_sam_features = None
+        try:
+            extractor = get_global_ground_sam_extractor()
+            if extractor is not None:
+                # 转换state为numpy数组
+                if isinstance(current_state, torch.Tensor):
+                    state_np = current_state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                else:
+                    state_np = current_state
+
+                # 提取特征(使用自动分割)
+                ground_sam_features = extractor.extract_features(
+                    state_np,
+                    use_auto_segmentation=True
+                )
+
+                # 调试日志
+                vis_logger = logging.getLogger('ppo_agent_logger')
+                vis_logger.info(f"可视化: 提取Ground-SAM特征成功, keys={list(ground_sam_features.keys())}")
+                if 'mask_features' in ground_sam_features:
+                    vis_logger.info(f"可视化: mask_features数量={len(ground_sam_features['mask_features'])}")
+        except Exception as e:
+            vis_logger = logging.getLogger('ppo_agent_logger')
+            vis_logger.error(f"提取Ground-SAM特征失败(可视化用): {e}")
 
         # 更新可视化(包含Ground-SAM特征)
         visualizer.update_image_and_detections(current_state, detections, ground_sam_features)
@@ -1467,6 +1675,7 @@ class PPOAgent:
     PPO智能体(支持Ground-SAM)
     """
     def __init__(self, state_dim, move_action_dim, turn_action_dim, use_ground_sam=None):
+        self.sam_mask_counter = 0  # SAM掩码保存计数器
         config = CONFIG
         
         self.lr = config['LEARNING_RATE']
@@ -1552,8 +1761,17 @@ class PPOAgent:
             logprob = move_logprob + turn_logprob
         
         # 处理动作参数
-        move_forward_step_raw = action_params[0][0].item()  # [-1,1]范围
-        turn_angle_raw = action_params[0][1].item()         # [-1,1]范围
+        # 确保 action_params 的形状正确
+        action_params_flat = action_params.flatten()
+
+        if action_params_flat.shape[0] >= 2:
+            move_forward_step_raw = action_params_flat[0].item()  # [-1,1]范围
+            turn_angle_raw = action_params_flat[1].item()         # [-1,1]范围
+        else:
+            # 如果参数不够，使用默认值
+            logger.warning(f"action_params 维度异常: {action_params.shape}, 使用默认值")
+            move_forward_step_raw = 0.0
+            turn_angle_raw = 0.0
         
         # 使用配置文件中的参数范围
         MOVE_STEP_MIN = CONFIG.get('MOVE_STEP_MIN', 0.0)

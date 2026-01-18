@@ -36,11 +36,15 @@ class FrozenSAMBackbone(nn.Module):
 
         self.sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
         self.sam.to(self.device)
-        
+
         # 冻结所有预训练参数
         self._freeze_pretrained_weights()
+
+        # 验证并修正设备
+        self._validate_device()
         
         # 创建自动掩码生成器(用于无text_prompt的自动分割)
+        # 注意:SamAutomaticMaskGenerator内部会使用self.sam,需要确保sam在正确设备上
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
             points_per_side=32,      # 控制采样密度
@@ -53,6 +57,10 @@ class FrozenSAMBackbone(nn.Module):
             crop_n_points_downscale_factor=1,
             min_mask_region_area=100,  # 最小掩码区域面积
         )
+
+        # 确保mask_generator使用的模型也在正确设备上
+        if hasattr(self.mask_generator, 'model'):
+            self.mask_generator.model = self.mask_generator.model.to(self.device)
         
         logger.info(f"SAM模型加载完成并冻结 ({model_type}), 设备: {device}")
     
@@ -82,7 +90,20 @@ class FrozenSAMBackbone(nn.Module):
         """冻结所有预训练参数"""
         for param in self.sam.parameters():
             param.requires_grad = False
-        logger.info("SAM预训练权重已冻结")
+        logger.info(f"SAM预训练权重已冻结 (设备: {next(self.sam.parameters()).device})")
+
+    def _validate_device(self):
+        """验证模型参数都在正确的设备上,不打印警告"""
+        expected_device = torch.device(self.device)
+        mismatches = 0
+        for name, param in self.sam.named_parameters():
+            if param.device != expected_device:
+                # 尝试移动到正确设备
+                param.data = param.data.to(expected_device)
+                mismatches += 1
+
+        if mismatches > 0:
+            logger.info(f"已将 {mismatches} 个参数移动到 {self.device} 设备")
     
     def extract_image_features(self, image: np.ndarray) -> Dict[str, torch.Tensor]:
         """
@@ -95,11 +116,14 @@ class FrozenSAMBackbone(nn.Module):
         # 确保模型在正确的设备上
         if hasattr(self, 'device'):
             self.sam.to(self.device)
-        
+
         # 创建predictor并设置图像
         predictor = SamPredictor(self.sam)
         # 确保predictor的模型也在正确的设备上
-        predictor.model = predictor.model.to(self.device) if hasattr(self, 'device') else predictor.model
+        if hasattr(self, 'device'):
+            predictor.model = predictor.model.to(self.device)
+
+        # 设置图像，确保输入数据也在正确的设备上
         predictor.set_image(image)
 
         # 获取图像嵌入
@@ -111,13 +135,21 @@ class FrozenSAMBackbone(nn.Module):
         # 获取特征
         features['image_embedding'] = predictor.features
 
+        # 确保特征在正确的设备上
+        if hasattr(self, 'device'):
+            features['image_embedding'] = features['image_embedding'].to(self.device)
+
         # 获取位置编码(如果存在)
         try:
             # 不同的SAM版本可能有不同的属性访问方式
             if hasattr(predictor.model, 'pe_layer'):
                 features['image_pe'] = predictor.model.pe_layer.positional_embedding
+                if hasattr(self, 'device'):
+                    features['image_pe'] = features['image_pe'].to(self.device)
             elif hasattr(predictor.model, 'sam') and hasattr(predictor.model.sam, 'pe_layer'):
                 features['image_pe'] = predictor.model.sam.pe_layer.positional_embedding
+                if hasattr(self, 'device'):
+                    features['image_pe'] = features['image_pe'].to(self.device)
         except Exception as e:
             # 如果位置编码获取失败,不影响主要功能
             logger.debug(f"无法获取位置编码: {e}")
@@ -136,13 +168,14 @@ class FrozenSAMBackbone(nn.Module):
         # 确保模型在正确的设备上
         if hasattr(self, 'device'):
             self.sam.to(self.device)
-        
+
         # 创建predictor
         predictor = SamPredictor(self.sam)
         # 确保predictor的模型也在正确的设备上
-        predictor.model = predictor.model.to(self.device) if hasattr(self, 'device') else predictor.model
+        if hasattr(self, 'device'):
+            predictor.model = predictor.model.to(self.device)
         predictor.set_image(image)
-        
+
         mask_features = []
         for box in boxes:
             masks, iou_scores, low_res_masks = predictor.predict(
@@ -151,12 +184,17 @@ class FrozenSAMBackbone(nn.Module):
                 box=np.array(box)[None, :],
                 multimask_output=False,
             )
+            # 确保输出张量在正确的设备上
+            if hasattr(self, 'device'):
+                masks = masks.to(self.device)
+                iou_scores = iou_scores.to(self.device)
+                low_res_masks = low_res_masks.to(self.device)
             mask_features.append({
                 'mask': masks[0],
                 'iou_score': iou_scores[0],
                 'low_res_mask': low_res_masks[0]
             })
-        
+
         return mask_features
     
     def automatic_segmentation(self, image: np.ndarray) -> List[Dict]:
@@ -171,8 +209,12 @@ class FrozenSAMBackbone(nn.Module):
         if hasattr(self, 'device'):
             self.sam.to(self.device)
             # 确保mask_generator的模型也在正确的设备上
-            self.mask_generator.model = self.mask_generator.model.to(self.device)
-        
+            if hasattr(self.mask_generator, 'model'):
+                self.mask_generator.model = self.mask_generator.model.to(self.device)
+            # 确保predictor也在正确设备上
+            if hasattr(self.mask_generator, 'predictor'):
+                self.mask_generator.predictor.model = self.mask_generator.predictor.model.to(self.device)
+
         masks = self.mask_generator.generate(image)
         return masks
     
@@ -220,17 +262,33 @@ class FrozenGroundingDINO(nn.Module):
             self.device = device
 
         self.model.to(self.device)
-        
+
         # 冻结所有预训练参数
         self._freeze_pretrained_weights()
-        
-        logger.info(f"Grounding DINO模型加载完成并冻结, 设备: {device}")
+
+        # 验证并修正设备
+        self._validate_device()
+
+        logger.info(f"Grounding DINO模型加载完成并冻结, 设备: {device}, 实际设备: {next(self.model.parameters()).device}")
     
     def _freeze_pretrained_weights(self):
         """冻结所有预训练参数"""
         for param in self.model.parameters():
             param.requires_grad = False
         logger.info("Grounding DINO预训练权重已冻结")
+
+    def _validate_device(self):
+        """验证模型参数都在正确的设备上,不打印警告"""
+        expected_device = torch.device(self.device)
+        mismatches = 0
+        for name, param in self.model.named_parameters():
+            if param.device != expected_device:
+                # 尝试移动到正确设备
+                param.data = param.data.to(expected_device)
+                mismatches += 1
+
+        if mismatches > 0:
+            logger.info(f"已将 {mismatches} 个参数移动到 {self.device} 设备")
     
     def detect_objects(self, image: Image.Image, text_prompt: str, 
                       threshold: float = 0.3, text_threshold: float = 0.25) -> Dict:

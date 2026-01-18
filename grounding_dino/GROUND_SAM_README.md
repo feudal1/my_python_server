@@ -9,12 +9,14 @@
 - ✅ **高质量分割**: 结合SAM进行精确的图像分割
 - ✅ **批量处理**: 支持批量图像特征提取
 - ✅ **PPO集成**: 提供与PPO强化学习算法的集成示例
+- ✅ **掩码可视化**: 支持SAM自动分割掩码的可视化和保存
 
 ## 文件说明
 
 - `ground_sam_feature_extractor.py` - 核心特征提取器模块
 - `ground_sam_rl_integration.py` - 与强化学习(PPOR)集成示例
 - `ground_sam_usage_example.py` - 使用示例和测试代码
+- `demo_visualize_masks.py` - SAM掩码可视化演示脚本(位于grounding_dino目录)
 
 ## 快速开始
 
@@ -80,6 +82,58 @@ observation = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
 move_action, turn_action, value = trainer.agent.get_action(observation)
 ```
 
+### 4. SAM掩码可视化
+
+在PPO训练过程中可视化SAM自动分割结果:
+
+```python
+import numpy as np
+from ground_sam_feature_extractor import get_groundsam_extractor
+
+# 加载图像
+image = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+
+# 获取特征提取器
+extractor = get_groundsam_extractor(sam_model_type='vit_b', device='cuda')
+
+# 生成SAM掩码
+with torch.no_grad():
+    masks = extractor.sam_backbone.automatic_segmentation(image)
+
+print(f"检测到 {len(masks)} 个对象")
+```
+
+**快速演示脚本:**
+
+```bash
+# 从grounding_dino目录运行演示
+cd grounding_dino
+python demo_visualize_masks.py
+
+# 或从项目根目录运行
+python demo_show_sam_masks.py --image your_image.jpg --output result.png
+```
+
+**在PPO训练中启用掩码可视化:**
+
+在 `sifu_control/ppo_training.py` 中修改 `_extract_sam_embedding` 调用:
+
+```python
+# 提取SAM特征并可视化掩码
+sam_embedding = self._extract_sam_embedding(
+    image_np,
+    visualize_mask=True,                      # 启用掩码可视化
+    save_path='./output/sam_masks.png'       # 保存路径
+)
+```
+
+可视化结果包含:
+- 彩色半透明掩码叠加层
+- 每个对象的边界框
+- 信息标签(编号、面积、IoU分数)
+
+详细使用说明请参考 [SAM_MASKS_README.md](./SAM_MASKS_README.md)
+
 ## API文档
 
 ### GroundSAMFeatureExtractor
@@ -95,6 +149,7 @@ move_action, turn_action, value = trainer.agent.get_action(observation)
 - `extract_features(image, text_prompt=None, boxes=None)`: 提取图像特征
 - `extract_image_features(image)`: 提取图像嵌入特征
 - `extract_mask_features(image, boxes)`: 提取掩码特征
+- `automatic_segmentation(image)`: SAM自动分割(无文本提示)
 - `get_feature_dim()`: 获取特征维度
 
 ### FrozenSAMBackbone
@@ -105,6 +160,19 @@ move_action, turn_action, value = trainer.agent.get_action(observation)
 - 所有预训练参数已冻结(`requires_grad=False`)
 - 支持图像特征和掩码特征提取
 - 支持批量处理
+- **SAM自动分割**: 使用 `SamAutomaticMaskGenerator` 进行无文本提示的自动分割
+- **掩码可视化**: 提供自动分割结果的可视化功能
+
+**主要方法:**
+- `extract_image_features(image)`: 提取图像嵌入特征
+- `extract_mask_features(image, boxes)`: 提取给定边界框的掩码特征
+- `automatic_segmentation(image)`: SAM自动分割,返回所有检测到的对象掩码
+
+**自动分割参数:**
+- `points_per_side`: 采样点网格密度(默认32)
+- `pred_iou_thresh`: 预测IoU阈值(默认0.86)
+- `stability_score_thresh`: 稳定性分数阈值(默认0.92)
+- `min_mask_region_area`: 最小掩码区域面积(默认100像素)
 
 ### FrozenGroundingDINO
 
@@ -133,6 +201,16 @@ python grounding_dino/ground_sam_usage_example.py
 
 # 运行集成示例
 python grounding_dino/ground_sam_rl_integration.py
+
+# SAM掩码可视化演示(从grounding_dino目录)
+cd grounding_dino
+python demo_visualize_masks.py
+
+# 或从项目根目录运行完整演示
+python demo_show_sam_masks.py
+
+# 指定图像进行掩码可视化
+python demo_show_sam_masks.py --image your_image.jpg --output result.png
 ```
 
 ## 模型说明
@@ -228,6 +306,30 @@ trainer.save_checkpoint('checkpoint.pth')
 # 加载检查点
 trainer.load_checkpoint('checkpoint.pth')
 ```
+
+**Q: 如何在PPO训练中可视化SAM掩码?**
+在 `sifu_control/ppo_training.py` 中启用掩码可视化:
+```python
+sam_embedding = self._extract_sam_embedding(
+    image_np,
+    visualize_mask=True,
+    save_path='./sam_masks_step_1.png'
+)
+```
+
+**Q: SAM掩码如何使用?**
+SAM自动分割返回的每个掩码包含:
+```python
+{
+    'segmentation': np.ndarray,  # 二值掩码 (H, W)
+    'area': float,               # 面积(像素数)
+    'bbox': tuple,               # 边界框 [x, y, w, h]
+    'predicted_iou': float,      # 预测IoU分数
+    'stability_score': float,    # 稳定性分数
+}
+```
+
+详细使用方法请参考 `SAM_MASKS_README.md` 或运行 `demo_show_sam_masks.py` 查看演示。
 
 ## 许可证
 
