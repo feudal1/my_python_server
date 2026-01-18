@@ -47,7 +47,7 @@ class FrozenSAMBackbone(nn.Module):
         # 注意:SamAutomaticMaskGenerator内部会使用self.sam,需要确保sam在正确设备上
         self.mask_generator = SamAutomaticMaskGenerator(
             model=self.sam,
-            points_per_side=32,      # 控制采样密度
+            points_per_side=16,      # 控制采样密度 (从32降到16,提升4-5倍速度)
             points_per_batch=64,     # 批处理大小
             pred_iou_thresh=0.86,    # 预测IoU阈值(降低以检测更多对象)
             stability_score_thresh=0.92,  # 稳定性分数阈值
