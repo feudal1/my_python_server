@@ -11,11 +11,12 @@ PPO强化学习智能体 - 集成Ground-SAM特征提取
 - 多环境支持: 支持Sifu游戏环境和测试环境
 
 SAM掩码可视化使用方法:
-    在训练代码中调用_extract_sam_embedding时启用可视化:
+    注意: 为提升训练速度,默认已禁用掩码绘制(visualize_mask=False)。
+    如需调试,可在代码中手动启用可视化:
 
     sam_embedding = self._extract_sam_embedding(
         image_np,
-        visualize_mask=True,                      # 启用掩码可视化
+        visualize_mask=True,                      # 启用掩码可视化(调试用)
         save_path='./output/sam_masks.png'       # 保存路径
     )
 
@@ -50,6 +51,9 @@ import glob
 import re
 import tkinter as tk
 from tkinter import ttk
+import h5py
+import pickle
+from datetime import datetime
 
 # 导入Ground-SAM特征提取器
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'grounding_dino'))
@@ -144,6 +148,425 @@ def setup_logging():
     return logger
 
 
+class SLAMMapBuilder:
+    """
+    基于Ground-SAM特征的轻量级SLAM地图构建器
+    构建语义占用栅格地图
+    """
+    def __init__(self, map_size=100, resolution=0.1):
+        """
+        Args:
+            map_size: 地图尺寸（栅格数）
+            resolution: 每个栅格对应的实际距离（米）
+        """
+        self.map_size = map_size
+        self.resolution = resolution
+        self.center = map_size // 2  # 当前位置始终在地图中心
+
+        # 占用栅格：0=未知, 1=空闲, 2=障碍物, 3=门
+        self.occupancy_grid = np.zeros((map_size, map_size), dtype=np.int8)
+
+        # 语义地图：存储每个栅格的语义类别
+        self.semantic_grid = np.zeros((map_size, map_size), dtype=np.int8)
+
+        # 访问频率：用于衡量探索程度
+        self.visit_count = np.zeros((map_size, map_size), dtype=np.int32)
+
+        # 历史路径：存储访问过的位置
+        self.path_history = []
+        self.max_path_length = 500
+
+        # 统计信息
+        self.total_cells = map_size * map_size
+        self.explored_cells = 0
+        self.obstacle_cells = 0
+        self.door_cells = 0
+
+        # 添加：追踪当前位置和朝向
+        self.current_map_x = self.center
+        self.current_map_y = self.center
+        self.current_heading = 0  # 朝向角度（弧度）
+        self.current_step_count = 0
+
+    def update(self, detections, move_action, move_step, turn_action, turn_angle, current_image=None):
+        """
+        根据检测结果和动作更新地图
+        使用视觉里程计（Visual Odometry）方法：通过追踪物体相对位置变化来推断实际移动
+        Args:
+            detections: YOLO检测结果
+            move_action: 移动动作索引
+            move_step: 移动步长
+            turn_action: 转向动作索引
+            turn_angle: 转向角度
+            current_image: 当前图像（用于检测障碍物）
+        Returns:
+            地图特征向量（用于PPO状态）
+        """
+        # 保存上一帧的检测数据用于视觉里程计
+        if not hasattr(self, 'prev_detections'):
+            self.prev_detections = []
+            self.prev_heading = 0
+
+        # 打印检测到的物体
+        logger = setup_logging()
+        if len(detections) == 0:
+            logger.debug(f"[SLAM] YOLO检测到 0 个物体")
+        else:
+            logger.info(f"[SLAM] YOLO检测到 {len(detections)} 个物体:")
+            for i, det in enumerate(detections):
+                label = det.get('label', 'unknown')
+                bbox = det.get('bbox', [])
+                cx = (bbox[0] + bbox[2]) / 2 if len(bbox) >= 4 else 0
+                cy = (bbox[1] + bbox[3]) / 2 if len(bbox) >= 4 else 0
+                score = det.get('score', 0)
+                logger.info(f"  物体{i}: {label}, 中心点=({cx:.1f}, {cy:.1f}), 置信度={score:.3f}")
+
+        # 检测环境中的障碍物（基于图像分析）
+        obstacle_points = self._detect_obstacles_from_image(current_image) if current_image is not None else []
+        logger.info(f"[SLAM] 从图像中检测到 {len(obstacle_points)} 个障碍物特征点")
+
+        # 使用视觉里程计估计实际移动
+        if len(self.prev_detections) > 0 and len(detections) > 0:
+            # 计算物体相对位置的变化来估计位移
+            dx, dy, dheading = self._estimate_visual_odometry(self.prev_detections, detections)
+
+            logger.info(f"[SLAM] 视觉里程计: dx={dx:.3f}, dy={dy:.3f}, 当前位置=({self.current_map_x:.1f}, {self.current_map_y:.1f})")
+
+            # 如果检测到显著变化，更新位置
+            if abs(dx) > 0.1 or abs(dy) > 0.1:
+                self.current_map_x += dx
+                self.current_map_y += dy
+
+            # 估计转向（基于动作命令，因为转向通常是可靠的）
+            if turn_action == 0:  # turn_left
+                dheading = np.radians(turn_angle)
+            elif turn_action == 1:  # turn_right
+                dheading = -np.radians(turn_angle)
+            else:
+                dheading = 0
+
+            self.current_heading += dheading
+            self.current_heading = self.current_heading % (2 * np.pi)
+
+        # 限制位置在地图范围内
+        self.current_map_x = np.clip(self.current_map_x, 2, self.map_size - 3)
+        self.current_map_y = np.clip(self.current_map_y, 2, self.map_size - 3)
+
+        current_pos = (int(self.current_map_x), int(self.current_map_y))
+
+        # 检测结果映射到地图（相对于当前位置和朝向）
+        for detection in detections:
+            # 将屏幕坐标映射到地图坐标
+            screen_center_x = (detection['bbox'][0] + detection['bbox'][2]) / 2
+            screen_center_y = (detection['bbox'][1] + detection['bbox'][3]) / 2
+
+            # 转换为相对于屏幕中心的偏移
+            offset_x = (screen_center_x - 320) / 320.0  # 归一化 [-1, 1]
+            offset_y = (screen_center_y - 240) / 240.0  # 归一化 [-1, 1]
+
+            # 根据朝向旋转偏移（反向向量）
+            rotated_offset_x = offset_x * np.cos(self.current_heading) - offset_y * np.sin(self.current_heading)
+            rotated_offset_y = offset_x * np.sin(self.current_heading) + offset_y * np.cos(self.current_heading)
+
+            # 映射到地图坐标（前方为正）
+            map_x = int(self.current_map_x + rotated_offset_x * 20)
+            map_y = int(self.current_map_y - rotated_offset_y * 20)  # Y轴反转
+
+            logger.info(f"[SLAM] 反向向量计算: 屏幕中心=({screen_center_x:.1f}, {screen_center_y:.1f}), "
+                       f"偏移=({offset_x:.2f}, {offset_y:.2f}), 朝向={self.current_heading:.2f}, "
+                       f"旋转后=({rotated_offset_x:.2f}, {rotated_offset_y:.2f}), "
+                       f"地图坐标=({map_x}, {map_y})")
+
+            # 确保在地图范围内
+            if 0 <= map_x < self.map_size and 0 <= map_y < self.map_size:
+                # 根据检测类型更新栅格
+                label_lower = detection['label'].lower()
+
+                if 'gate' in label_lower or 'door' in label_lower:
+                    # 门：类型3，绿色
+                    self.occupancy_grid[map_y, map_x] = 3
+                    self.semantic_grid[map_y, map_x] = 1
+                    self.door_cells += 1
+                    logger.info(f"[SLAM] 标记门在地图坐标 ({map_x}, {map_y})")
+                else:
+                    # 其他YOLO检测的物体作为障碍物（类型2，橙色）
+                    self.occupancy_grid[map_y, map_x] = 2
+                    self.semantic_grid[map_y, map_x] = 0
+                    self.obstacle_cells += 1
+                    logger.info(f"[SLAM] 标记物体 {detection.get('label', 'unknown')} 在地图坐标 ({map_x}, {map_y})")
+
+                self.visit_count[map_y, map_x] += 1
+            else:
+                logger.warning(f"[SLAM] 物体 {detection.get('label', 'unknown')} 坐标 ({map_x}, {map_y}) 超出地图范围")
+
+        # 标记障碍物特征点到地图上
+        for ox, oy in obstacle_points:
+            # 转换为相对于屏幕中心的偏移
+            offset_x = (ox - 320) / 320.0  # 归一化 [-1, 1]
+            offset_y = (oy - 240) / 240.0  # 归一化 [-1, 1]
+
+            # 根据朝向旋转偏移
+            rotated_offset_x = offset_x * np.cos(self.current_heading) - offset_y * np.sin(self.current_heading)
+            rotated_offset_y = offset_x * np.sin(self.current_heading) + offset_y * np.cos(self.current_heading)
+
+            # 映射到地图坐标
+            map_x = int(self.current_map_x + rotated_offset_x * 20)
+            map_y = int(self.current_map_y - rotated_offset_y * 20)
+
+            # 确保在地图范围内
+            if 0 <= map_x < self.map_size and 0 <= map_y < self.map_size:
+                # 标记为障碍物（类型2）
+                if self.occupancy_grid[map_y, map_x] == 0:  # 如果该位置为空，才标记
+                    self.occupancy_grid[map_y, map_x] = 2
+                    self.semantic_grid[map_y, map_x] = 0
+                    self.obstacle_cells += 1
+
+        # 更新路径历史
+        self.path_history.append(current_pos)
+        if len(self.path_history) > self.max_path_length:
+            self.path_history.pop(0)
+
+        # 标记当前位置为已访问
+        self.visit_count[current_pos[1], current_pos[0]] += 1
+
+        # 更新统计
+        self.explored_cells = np.sum(self.visit_count > 0)
+
+        self.current_step_count += 1
+
+        # 保存当前检测作为上一帧
+        self.prev_detections = detections.copy()
+
+        # 返回地图特征向量
+        return self._get_map_features()
+
+    def _estimate_visual_odometry(self, prev_detections, current_detections):
+        """
+        通过追踪物体相对位置变化来估计位移
+        Args:
+            prev_detections: 上一帧的检测结果
+            current_detections: 当前帧的检测结果
+        Returns:
+            (dx, dy, dheading): 估计的位移和转向变化
+        """
+        # 找到两帧之间匹配的物体（通过中心点距离）
+        matched_pairs = []
+        for prev in prev_detections:
+            prev_center_x = (prev['bbox'][0] + prev['bbox'][2]) / 2
+            prev_center_y = (prev['bbox'][1] + prev['bbox'][3]) / 2
+
+            for curr in current_detections:
+                curr_center_x = (curr['bbox'][0] + curr['bbox'][2]) / 2
+                curr_center_y = (curr['bbox'][1] + curr['bbox'][3]) / 2
+
+                # 计算距离
+                dist = np.sqrt((prev_center_x - curr_center_x) ** 2 +
+                              (prev_center_y - curr_center_y) ** 2)
+
+                # 如果距离小于阈值，认为是同一个物体
+                if dist < 50:
+                    matched_pairs.append((prev, curr))
+                    break
+
+        if len(matched_pairs) < 2:
+            # 匹配不够，无法估计位移，返回0
+            return 0, 0, 0
+
+        # 计算所有匹配对的位置变化
+        dx_list = []
+        dy_list = []
+
+        for prev, curr in matched_pairs:
+            prev_center_x = (prev['bbox'][0] + prev['bbox'][2]) / 2
+            prev_center_y = (prev['bbox'][1] + prev['bbox'][3]) / 2
+            curr_center_x = (curr['bbox'][0] + curr['bbox'][2]) / 2
+            curr_center_y = (curr['bbox'][1] + curr['bbox'][3]) / 2
+
+            # 屏幕上的位移
+            screen_dx = curr_center_x - prev_center_x
+            screen_dy = curr_center_y - prev_center_y
+
+            # 将屏幕位移映射到地图坐标系（考虑朝向）
+            map_dx = screen_dx * 0.02 * np.cos(self.current_heading) - screen_dy * 0.02 * np.sin(self.current_heading)
+            map_dy = screen_dx * 0.02 * np.sin(self.current_heading) + screen_dy * 0.02 * np.cos(self.current_heading)
+
+            dx_list.append(map_dx)
+            dy_list.append(map_dy)
+
+        # 使用中位数来过滤异常值
+        dx = np.median(dx_list) if dx_list else 0
+        dy = np.median(dy_list) if dy_list else 0
+
+        return dx, dy, 0
+
+    def _detect_obstacles_from_image(self, image):
+        """
+        从图像中检测障碍物特征点
+        使用简单的图像处理：边缘检测 + 关键点检测
+        Args:
+            image: 当前图像（numpy数组，BGR格式）
+        Returns:
+            list of (x, y) 屏幕坐标系中的障碍物点
+        """
+        if image is None:
+            return []
+
+        try:
+            # 转换为灰度图
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+            # 使用Canny边缘检测
+            edges = cv2.Canny(gray, 50, 150)
+
+            # 使用角点检测（Good Features to Track）
+            corners = cv2.goodFeaturesToTrack(
+                gray,
+                maxCorners=20,  # 最多检测20个关键点
+                qualityLevel=0.01,  # 质量阈值
+                minDistance=30,  # 最小距离
+                blockSize=3
+            )
+
+            obstacle_points = []
+            if corners is not None:
+                corners = corners.reshape(-1, 2)
+
+                # 筛选有效的角点（避免中心区域）
+                screen_center_x, screen_center_y = 320, 240
+                for corner in corners:
+                    x, y = corner
+
+                    # 计算到中心的距离
+                    dist = np.sqrt((x - screen_center_x) ** 2 + (y - screen_center_y) ** 2)
+
+                    # 只选择视野中段的角点（太近或太远都不要）
+                    if 50 < dist < 200:
+                        obstacle_points.append((x, y))
+
+            logger = setup_logging()
+            logger.debug(f"[SLAM] 检测到 {len(obstacle_points)} 个障碍物特征点")
+
+            return obstacle_points
+
+        except Exception as e:
+            logger = setup_logging()
+            logger.warning(f"[SLAM] 障碍物检测失败: {e}")
+            return []
+
+    def _get_map_features(self):
+        """
+        获取地图特征向量（用于PPO状态）
+        Returns:
+            map_features: (map_size, map_size, 4) 张量
+            [占用状态, 语义类别, 访问频率, 距离中心的距离]
+        """
+        # 归一化访问频率
+        normalized_visit = self.visit_count / (np.max(self.visit_count) + 1)
+
+        # 计算距离中心的距离
+        y_indices, x_indices = np.indices((self.map_size, self.map_size))
+        distance_from_center = np.sqrt((x_indices - self.center) ** 2 + (y_indices - self.center) ** 2)
+        normalized_distance = distance_from_center / (self.map_size / 2)
+
+        # 组合四个通道
+        map_features = np.stack([
+            self.occupancy_grid / 4.0,  # 归一化到 [0, 1]
+            self.semantic_grid / 3.0,    # 归一化到 [0, 1]
+            normalized_visit,              # 访问频率
+            1.0 - normalized_distance       # 距离中心的远近（反转）
+        ], axis=-1)
+
+        return torch.FloatTensor(map_features).permute(2, 0, 1)  # (4, H, W)
+
+    def get_map_image(self, size=(300, 300)):
+        """
+        获取用于可视化的地图图像
+        Args:
+            size: 输出图像尺寸
+        Returns:
+            RGB图像
+        """
+        # 创建彩色地图
+        colormap = np.zeros((self.map_size, self.map_size, 3), dtype=np.uint8)
+
+        # 颜色映射：0=黑色(未知), 1=灰色(已访问), 2=橙色(障碍物), 3=绿色(门)
+        colors = {
+            0: [0, 0, 0],      # 未知 - 黑色
+            1: [100, 100, 100],  # 已访问/空闲 - 深灰色
+            2: [255, 165, 0],  # 障碍物 - 橙色
+            3: [0, 255, 0]      # 门 - 绿色（唯一）
+        }
+
+        for value, color in colors.items():
+            mask = self.occupancy_grid == value
+            colormap[mask] = color
+
+        # 绘制已访问区域（淡黄色）
+        visited_mask = self.visit_count > 0
+        # 创建半透明的黄色覆盖层
+        visited_overlay = np.zeros((self.map_size, self.map_size, 3), dtype=np.uint8)
+        visited_overlay[visited_mask] = [60, 60, 20]
+        colormap = cv2.addWeighted(colormap, 1.0, visited_overlay, 0.5, 0)
+
+        # 绘制路径历史（亮黄色）
+        if len(self.path_history) > 1:
+            for i in range(len(self.path_history) - 1):
+                y1, x1 = self.path_history[i]
+                y2, x2 = self.path_history[i + 1]
+                cv2.line(colormap, (x1, y1), (x2, y2), (255, 255, 0), 2)
+
+        # 绘制当前位置（紫色十字）
+        cx, cy = int(self.current_map_x), int(self.current_map_y)
+        cv2.line(colormap, (cx - 5, cy), (cx + 5, cy), (255, 0, 255), 3)
+        cv2.line(colormap, (cx, cy - 5), (cx, cy + 5), (255, 0, 255), 3)
+
+        # 绘制朝向指示（粉红色箭头）
+        arrow_length = 10
+        end_x = cx + int(arrow_length * np.sin(self.current_heading))
+        end_y = cy - int(arrow_length * np.cos(self.current_heading))
+        cv2.arrowedLine(colormap, (cx, cy), (end_x, end_y), (255, 105, 180), 3)
+
+        # 绘制检测到的物体（用小点标注，按类型区分颜色）
+        for y in range(self.map_size):
+            for x in range(self.map_size):
+                obj_type = self.occupancy_grid[y, x]
+                if obj_type > 1:  # 有物体
+                    # 根据物体类型使用不同颜色的小点
+                    if obj_type == 2:  # 障碍物 - 橙色
+                        cv2.circle(colormap, (x, y), 1, (255, 165, 0), -1)
+                    elif obj_type == 3:  # 门 - 绿色（唯一，稍微大一点）
+                        cv2.circle(colormap, (x, y), 2, (0, 255, 0), -1)
+
+        # 调整大小
+        map_image = cv2.resize(colormap, size, interpolation=cv2.INTER_NEAREST)
+
+        return map_image
+
+    def get_stats(self):
+        """获取地图统计信息"""
+        return {
+            'explored_ratio': self.explored_cells / self.total_cells,
+            'obstacle_count': self.obstacle_cells,
+            'door_count': self.door_cells,
+            'total_cells': self.total_cells
+        }
+
+    def reset(self):
+        """重置地图"""
+        self.occupancy_grid.fill(0)
+        self.semantic_grid.fill(0)
+        self.visit_count.fill(0)
+        self.path_history.clear()
+        self.explored_cells = 0
+        self.obstacle_cells = 0
+        self.door_cells = 0
+        self.current_map_x = self.center
+        self.current_map_y = self.center
+        self.current_heading = 0
+        self.current_step_count = 0
+        self.prev_detections = []
+
+
 class GroundSAMFeatureEncoder(nn.Module):
     """
     Ground-SAM特征编码器
@@ -182,13 +605,13 @@ class GroundSAMFeatureEncoder(nn.Module):
         Args:
             sam_features: SAM图像嵌入 (H, W, C) 或 (B, H, W, C)
         Returns:
-            编码后的特征向量
+            编码后的特征向量 (B, feature_dim)
         """
         if sam_features.dim() == 3:
             # 单张图像: (H, W, C) -> (C, H, W)
             x = sam_features.permute(2, 0, 1).unsqueeze(0)
             x = self.encoder(x)
-            return x.squeeze(0)
+            return x
         elif sam_features.dim() == 4:
             # 批量: (B, H, W, C) -> (B, C, H, W)
             x = sam_features.permute(0, 3, 1, 2)
@@ -200,18 +623,19 @@ class GroundSAMFeatureEncoder(nn.Module):
 
 class PolicyNetwork(nn.Module):
     """
-    策略网络(使用Ground-SAM特征提取)
+    策略网络(使用Ground-SAM特征提取 + SLAM地图融合)
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256, use_ground_sam=False):
+    def __init__(self, state_dim, move_action_dim, turn_action_dim, hidden_size=256, use_ground_sam=False, use_slam_map=False):
         super(PolicyNetwork, self).__init__()
 
         self.sam_mask_counter = 0  # SAM掩码保存计数器
 
         self.use_ground_sam = use_ground_sam and GROUND_SAM_AVAILABLE
-        
+        self.use_slam_map = use_slam_map
+
         # 特征维度
         feature_size = 256
-        
+
         # 如果使用Ground-SAM,初始化SAM特征编码器
         if self.use_ground_sam:
             try:
@@ -231,54 +655,82 @@ class PolicyNetwork(nn.Module):
                 self.has_ground_sam = False
         else:
             self.has_ground_sam = False
-        
-        
-        
+
+        # SLAM地图编码器（4通道：占用、语义、访问频率、距离）
+        if self.use_slam_map:
+            self.slam_map_encoder = nn.Sequential(
+                nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.BatchNorm2d(32),
+
+                nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.BatchNorm2d(64),
+
+                nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+                nn.ReLU(),
+                nn.BatchNorm2d(128),
+
+                nn.AdaptiveAvgPool2d((1, 1)),
+                nn.Flatten(),
+                nn.Linear(128, 128),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            )
+            logger = setup_logging()
+            logger.info("SLAM地图编码器已初始化")
+
+        # 融合后的特征维度
+        combined_feature_size = feature_size
+        if self.use_slam_map:
+            combined_feature_size += 128
+
         # Actor heads
         self.move_actor = nn.Sequential(
-            nn.Linear(feature_size, hidden_size),
+            nn.Linear(combined_feature_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Linear(hidden_size // 2, move_action_dim)
         )
-        
+
         self.turn_actor = nn.Sequential(
-            nn.Linear(feature_size, hidden_size),
+            nn.Linear(combined_feature_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Linear(hidden_size // 2, turn_action_dim)
         )
-        
+
         # Action parameter head
         self.action_param_head = nn.Sequential(
-            nn.Linear(feature_size, hidden_size // 2),
+            nn.Linear(combined_feature_size, hidden_size // 2),
             nn.ReLU(),
             nn.Linear(hidden_size // 2, 64),
             nn.ReLU(),
             nn.Linear(64, 2),
             nn.Tanh()
         )
-        
+
         # Value network
         self.critic = nn.Sequential(
-            nn.Linear(feature_size, hidden_size),
+            nn.Linear(combined_feature_size, hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Linear(hidden_size // 2, 1)
         )
-        
+
         # 初始化logger
         self.logger = setup_logging()
 
-    def forward(self, state, return_debug_info=False):
+    def forward(self, state, return_debug_info=False, slam_map_features=None):
         """
         前向传播
         Args:
             state: 输入状态(图像)
             return_debug_info: 是否返回调试信息
+            slam_map_features: SLAM地图特征 (4, H, W) 可选
         Returns:
             策略输出
         """
@@ -296,13 +748,16 @@ class PolicyNetwork(nn.Module):
                         sam_embedding = self._extract_sam_embedding(image_np)
                         sam_encoded = self.sam_feature_encoder(sam_embedding)
                         sam_features_list.append(sam_encoded)
-                    features = torch.stack(sam_features_list)
+                    sam_features = torch.stack(sam_features_list)
                 else:
                     # 单张图像
                     # 将归一化的[0,1]范围转换回[0,255]的uint8格式
                     image_np = (state.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
                     sam_embedding = self._extract_sam_embedding(image_np)
-                    features = self.sam_feature_encoder(sam_embedding)
+                    logger = setup_logging()
+                    logger.info(f"sam_embedding shape: {sam_embedding.shape} (before encoder)")
+                    sam_features = self.sam_feature_encoder(sam_embedding)
+                    logger.info(f"sam_features shape: {sam_features.shape} (after encoder)")
             except Exception as e:
                 # 如果SAM特征提取失败，返回零特征
                 logger = setup_logging()
@@ -310,17 +765,48 @@ class PolicyNetwork(nn.Module):
                 # 返回零张量作为备选
                 if state.dim() == 4:
                     batch_size = state.shape[0]
-                    features = torch.zeros(batch_size, 256).to(state.device)
+                    sam_features = torch.zeros(batch_size, 256).to(state.device)
                 else:
-                    features = torch.zeros(1, 256).to(state.device)
+                    sam_features = torch.zeros(1, 256).to(state.device)
         else:
             # 如果不使用Ground-SAM，返回零特征
             if state.dim() == 4:
                 batch_size = state.shape[0]
-                features = torch.zeros(batch_size, 256).to(state.device)
+                sam_features = torch.zeros(batch_size, 256).to(state.device)
             else:
-                features = torch.zeros(1, 256).to(state.device)
-        
+                sam_features = torch.zeros(1, 256).to(state.device)
+
+        # 融合SLAM地图特征
+        if self.use_slam_map and slam_map_features is not None:
+            # 将SLAM地图特征移到相同设备
+            slam_map_features = slam_map_features.to(sam_features.device)
+
+            # 调试信息
+            logger = setup_logging()
+            logger.info(f"Before encoding - sam_features shape: {sam_features.shape}, slam_map_features shape: {slam_map_features.shape}")
+
+            # 确保sam_features是2D的
+            if sam_features.dim() == 3 and sam_features.shape[1] == 1:
+                # 如果是 [B, 1, feature_dim]，去掉多余的维度
+                sam_features = sam_features.squeeze(1)
+                logger.info(f"sam_features squeezed to: {sam_features.shape}")
+
+            # 编码SLAM地图
+            if slam_map_features.dim() == 3:
+                # 单张地图
+                slam_encoded = self.slam_map_encoder(slam_map_features.unsqueeze(0))
+            else:
+                # 批量地图
+                slam_encoded = self.slam_map_encoder(slam_map_features)
+
+            logger.info(f"After encoding - sam_features shape: {sam_features.shape}, slam_encoded shape: {slam_encoded.shape}")
+
+            # 融合SAM特征和SLAM地图特征
+            features = torch.cat([sam_features, slam_encoded], dim=-1)
+        else:
+            # 只使用SAM特征
+            features = sam_features
+
         # Actor outputs
         move_logits = self.move_actor(features)
         turn_logits = self.turn_actor(features)
@@ -371,14 +857,14 @@ class PolicyNetwork(nn.Module):
                 value
             )
     
-    def _extract_sam_embedding(self, image_np, visualize_mask=True, save_path=None, visualization_interval=10):
+    def _extract_sam_embedding(self, image_np, visualize_mask=False, save_path=None, visualization_interval=1000):
         """
         提取SAM图像嵌入(冻结的预训练模型)
         Args:
             image_np: numpy数组图像 (H, W, 3)
-            visualize_mask: 是否可视化SAM掩码
+            visualize_mask: 是否可视化SAM掩码 (默认False,大幅提升性能)
             save_path: 掩码图像保存路径(如果为None则自动生成路径)
-            visualization_interval: 每N步才可视化一次 (默认10,提升10倍速度)
+            visualization_interval: 每N步才可视化一次 (默认1000,几乎不绘制)
         Returns:
             SAM嵌入张量
         """
@@ -388,50 +874,48 @@ class PolicyNetwork(nn.Module):
 
         self.sam_mask_counter += 1  # 每次调用都递增计数器
 
-        logger = setup_logging()
-        logger.info(f"开始提取SAM特征, 图像形状: {image_np.shape}, 数据类型: {image_np.dtype}, 值范围: [{image_np.min()}, {image_np.max()}]")
+        # 完全禁用SAM掩码可视化,只提取特征
+        # 自动分割非常耗时(2-5秒),严重影响训练速度
+        # 如果需要调试,可以手动设置visualize_mask=True
 
-        try:
-            with torch.no_grad():  # SAM是冻结的,不计算梯度
-                # 可视化掩码(降低频率:每N步才可视化一次)
-                if visualize_mask and (self.sam_mask_counter % visualization_interval == 0):
-                    try:
-                        logger.info(f"步骤 {self.sam_mask_counter}: 开始SAM自动分割...")
-                        masks = extractor.sam_backbone.automatic_segmentation(image_np)
-                        logger.info(f"SAM自动分割完成,检测到 {len(masks)} 个对象")
+        with torch.no_grad():  # SAM是冻结的,不计算梯度
+            # 默认不进行自动分割和可视化,大幅提升性能
+            # 只在explicitly要求且间隔满足时才可视化
+            if visualize_mask and (self.sam_mask_counter % visualization_interval == 0):
+                try:
+                    logger = setup_logging()
+                    logger.info(f"步骤 {self.sam_mask_counter}: 开始SAM自动分割(仅用于调试)...")
 
-                        # 自动生成保存路径
-                        if save_path is None and hasattr(self, 'sam_mask_counter'):
-                            # 创建输出目录
-                            output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sam_masks_output')
-                            os.makedirs(output_dir, exist_ok=True)
+                    start_time = time.time()
+                    masks = extractor.sam_backbone.automatic_segmentation(image_np)
+                    seg_time = time.time() - start_time
 
-                            # 生成文件名
-                            save_path = os.path.join(output_dir, f'sam_mask_{self.sam_mask_counter:05d}.png')
+                    logger.info(f"SAM自动分割完成,检测到 {len(masks)} 个对象,耗时: {seg_time:.3f}秒")
 
-                        self._visualize_sam_masks(image_np, masks, save_path)
-                    except Exception as mask_error:
-                        logger.error(f"SAM掩码生成失败: {type(mask_error).__name__}: {mask_error}")
-                        import traceback
-                        logger.error(traceback.format_exc())
+                    # 自动生成保存路径
+                    if save_path is None and hasattr(self, 'sam_mask_counter'):
+                        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sam_masks_output')
+                        os.makedirs(output_dir, exist_ok=True)
+                        save_path = os.path.join(output_dir, f'sam_mask_{self.sam_mask_counter:05d}.png')
 
-                image_features = extractor.sam_backbone.extract_image_features(image_np)
-                sam_embedding = image_features['image_embedding']
+                    self._visualize_sam_masks_fast(image_np, masks, save_path)
+                except Exception as mask_error:
+                    logger = setup_logging()
+                    logger.error(f"SAM掩码生成失败: {type(mask_error).__name__}: {mask_error}")
 
-                logger.info(f"SAM特征提取成功, embedding形状: {sam_embedding.shape}, 设备: {sam_embedding.device}")
+            # 直接提取特征,不进行自动分割
+            image_features = extractor.sam_backbone.extract_image_features(image_np)
+            sam_embedding = image_features['image_embedding']
 
-                # 确保sam_embedding在正确的设备上(与sam_feature_encoder一致)
-                if hasattr(self, 'sam_feature_encoder'):
-                    device = next(self.sam_feature_encoder.parameters()).device
-                    sam_embedding = sam_embedding.to(device)
-                    logger.info(f"SAM特征已移动到设备: {device}")
+            logger = setup_logging()
+            logger.debug(f"SAM特征提取成功, embedding形状: {sam_embedding.shape}")
 
-                return sam_embedding
-        except Exception as e:
-            logger.error(f"SAM特征提取异常: {type(e).__name__}: {e}")
-            logger.error(f"提取器设备: {extractor.device if hasattr(extractor, 'device') else '未知'}")
-            logger.error(f"编码器设备: {next(self.sam_feature_encoder.parameters()).device if hasattr(self, 'sam_feature_encoder') else '未知'}")
-            raise
+            # 确保sam_embedding在正确的设备上(与sam_feature_encoder一致)
+            if hasattr(self, 'sam_feature_encoder'):
+                device = next(self.sam_feature_encoder.parameters()).device
+                sam_embedding = sam_embedding.to(device)
+
+            return sam_embedding
 
     def _visualize_sam_masks(self, image, masks, save_path=None):
         """
@@ -492,6 +976,72 @@ class PolicyNetwork(nn.Module):
                 logger.info(f"SAM掩码可视化已保存到: {save_path}")
             else:
                 logger.info("未指定保存路径,跳过保存")
+
+        except Exception as e:
+            logger.error(f"可视化SAM掩码失败: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def _visualize_sam_masks_fast(self, image, masks, save_path=None):
+        """
+        极速可视化SAM自动分割的掩码 (优化到0.1秒以内)
+
+        优化策略:
+        1. 只显示最大的3个掩码
+        2. 只绘制边界框,不进行像素级颜色叠加
+        3. 简化文字信息
+
+        Args:
+            image: 原始图像 (H, W, 3) numpy数组
+            masks: SAM生成的掩码列表
+            save_path: 保存路径,如果为None则不保存
+        """
+        logger = setup_logging()
+
+        try:
+            start_time = time.time()
+
+            # 创建图像副本用于绘制
+            vis_image = image.copy()
+
+            # 按面积排序掩码,只保留前3个最大的
+            sorted_masks = sorted(masks, key=lambda x: x['area'], reverse=True)
+            max_masks = min(len(sorted_masks), 3)  # 只显示3个,大幅减少绘制时间
+
+            # 预定义颜色(避免重复计算HSV)
+            colors = [
+                (0, 255, 0),    # 绿色
+                (255, 0, 0),    # 蓝色(OpenCV中是BGR)
+                (0, 0, 255)     # 红色
+            ]
+
+            for idx in range(max_masks):
+                mask_data = sorted_masks[idx]
+                mask = mask_data.get('segmentation') or mask_data.get('segmentation', None)
+
+                # 转换为numpy数组(如果是torch tensor)
+                if mask is not None and hasattr(mask, 'cpu'):
+                    mask = mask.cpu().numpy()
+
+                # 使用预定义颜色
+                color = colors[idx % len(colors)]
+
+                # 不进行像素级颜色叠加(最耗时的部分),只画边界框
+                x, y, w, h = mask_data['bbox']
+                cv2.rectangle(vis_image, (int(x), int(y)), (int(x + w), int(y + h)),
+                            color, 2)
+
+                # 简化文字信息,只显示序号
+                cv2.putText(vis_image, f"#{idx+1}", (int(x), max(5, int(y - 5))),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+
+            # 保存图像
+            if save_path:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                cv2.imwrite(save_path, vis_image)
+
+            elapsed = time.time() - start_time
+            logger.info(f"SAM掩码快速可视化完成,耗时: {elapsed:.3f}秒, 保存路径: {save_path}")
 
         except Exception as e:
             logger.error(f"可视化SAM掩码失败: {type(e).__name__}: {e}")
@@ -583,32 +1133,35 @@ class RealTimeVisualizer:
             # 创建Canvas用于显示图像
             self.canvas = tk.Canvas(self.image_frame, bg="black")
             self.canvas.pack(fill=tk.BOTH, expand=True)
-    def update_image_and_detections(self, image, detections, ground_sam_features=None):
+    def update_image_and_detections(self, image, detections, ground_sam_features=None, slam_map_image=None):
         """
         更新图像和检测结果，并立即触发界面更新
         Args:
             image: 当前图像
             detections: YOLO检测结果
             ground_sam_features: Ground-SAM特征(可选)
+            slam_map_image: SLAM小地图图像(可选)
         """
         with self.image_lock:
             self.current_image = image.copy() if image is not None else None
             self.detections = detections.copy() if detections is not None else []
             self.ground_sam_features = ground_sam_features
+            self.slam_map_image = slam_map_image
 
         # 将更新请求放入队列
         try:
-            self.gui_queue.put(('update_image', self.current_image, self.detections, self.ground_sam_features), block=False)
+            self.gui_queue.put(('update_image', self.current_image, self.detections, self.ground_sam_features, self.slam_map_image), block=False)
         except queue.Full:
             pass
 
-    def _update_image_display(self, image, detections, ground_sam_features=None):
+    def _update_image_display(self, image, detections, ground_sam_features=None, slam_map_image=None):
         """
         更新图像显示
         Args:
             image: 当前图像
             detections: 检测结果
             ground_sam_features: Ground-SAM特征(可选)
+            slam_map_image: SLAM小地图图像(可选)
         """
         if image is not None:
             # 先绘制SAM掩码(重新叠加原始图像)
@@ -623,6 +1176,24 @@ class RealTimeVisualizer:
             # 如果有智能体信息，也绘制在图像上
             if hasattr(self, '_last_agent_info') and self._last_agent_info:
                 display_img = self._add_agent_info_to_image(display_img, self._last_agent_info)
+
+            # 如果有SLAM小地图，将地图叠加到图像右上角
+            if slam_map_image is not None:
+                map_size = 200  # 小地图尺寸
+                map_resized = cv2.resize(slam_map_image, (map_size, map_size), interpolation=cv2.INTER_NEAREST)
+
+                # 叠加到显示图像的右上角
+                h, w = display_img.shape[:2]
+                if w >= map_size + 10 and h >= map_size + 10:
+                    # 叠加地图到右上角
+                    display_img[5:map_size + 5, w - map_size - 5:w - 5] = map_resized
+
+                    # 添加边框
+                    cv2.rectangle(display_img, (w - map_size - 5, 5), (w - 5, map_size + 5), (0, 0, 255), 2)
+
+                    # 添加标题
+                    cv2.putText(display_img, "SLAM Map", (w - map_size, 25),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
             # 转换为PIL图像
             pil_image = Image.fromarray(cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB))
@@ -786,8 +1357,12 @@ class RealTimeVisualizer:
                 msg_type, *args = self.gui_queue.get_nowait()
 
                 if msg_type == 'update_image':
-                    image, detections, ground_sam_features = args
-                    self._update_image_display(image, detections, ground_sam_features)
+                    if len(args) >= 4:
+                        image, detections, ground_sam_features, slam_map_image = args
+                    else:
+                        image, detections, ground_sam_features = args
+                        slam_map_image = None
+                    self._update_image_display(image, detections, ground_sam_features, slam_map_image)
                 elif msg_type == 'update_info':
                     info = args[0]
                     # 更新当前图像的信息显示
@@ -858,6 +1433,10 @@ class RealTimeVisualizer:
         Returns:
             绘制后的图像
         """
+        # 已禁用掩码绘制以提升性能，直接返回原始图像
+        return image
+
+        # 以下代码已禁用
         if features is None:
             return image
 
@@ -956,34 +1535,27 @@ def add_visualization_to_environment(TargetSearchEnvironment, visualizer):
         # 检测目标
         detections = self.detect_target(current_state)
 
-        # 提取Ground-SAM特征用于可视化
+        # Ground-SAM特征提取已禁用以提升性能
+        # 自动分割非常耗时，严重影响训练速度
         ground_sam_features = None
-        try:
-            extractor = get_global_ground_sam_extractor()
-            if extractor is not None:
-                # 转换state为numpy数组
-                if isinstance(current_state, torch.Tensor):
-                    state_np = current_state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-                else:
-                    state_np = current_state
 
-                # 提取特征(使用自动分割)
-                ground_sam_features = extractor.extract_features(
-                    state_np,
-                    use_auto_segmentation=True
-                )
+        # 获取SLAM小地图图像
+        slam_map_image = None
+        if hasattr(self, 'slam_map_builder'):
+            # 更新SLAM地图（传递当前图像用于障碍物检测）
+            slam_features = self.slam_map_builder.update(
+                detections,
+                move_action,
+                move_forward_step,
+                turn_action,
+                turn_angle,
+                current_image=current_state  # 传递当前图像用于障碍物检测
+            )
+            # 获取可视化地图
+            slam_map_image = self.slam_map_builder.get_map_image(size=(200, 200))
 
-                # 调试日志
-                vis_logger = logging.getLogger('ppo_agent_logger')
-                vis_logger.info(f"可视化: 提取Ground-SAM特征成功, keys={list(ground_sam_features.keys())}")
-                if 'mask_features' in ground_sam_features:
-                    vis_logger.info(f"可视化: mask_features数量={len(ground_sam_features['mask_features'])}")
-        except Exception as e:
-            vis_logger = logging.getLogger('ppo_agent_logger')
-            vis_logger.error(f"提取Ground-SAM特征失败(可视化用): {e}")
-
-        # 更新可视化(包含Ground-SAM特征)
-        visualizer.update_image_and_detections(current_state, detections, ground_sam_features)
+        # 更新可视化(包含SLAM地图)
+        visualizer.update_image_and_detections(current_state, detections, ground_sam_features, slam_map_image)
 
         # 执行原始step
         result = original_step(self, move_action, turn_action, move_forward_step, turn_angle)
@@ -1009,6 +1581,10 @@ def add_visualization_to_environment(TargetSearchEnvironment, visualizer):
 
     def reset_with_visualization(self):
         result = original_reset(self)
+
+        # 重置SLAM地图
+        if hasattr(self, 'slam_map_builder'):
+            self.slam_map_builder.reset()
 
         # 更新可视化
         visualizer.update_image_and_detections(result, [])
@@ -1243,34 +1819,45 @@ class TargetSearchEnvironment:
         if self.yolo_model is None:
             self.logger.error("YOLO模型未加载，无法进行检测")
             return []
-        
+
         try:
+            conf_threshold = CONFIG.get('DETECTION_CONFIDENCE', 0.4)
+            self.logger.debug(f"YOLO检测开始，置信度阈值: {conf_threshold}")
+
             results = self.yolo_model.predict(
                 source=image,
-                conf=CONFIG['DETECTION_CONFIDENCE'],
+                conf=conf_threshold,
                 save=False,
                 verbose=False
             )
-            
+
             detections = []
             result = results[0]
-            
+
+            # 调试：打印原始检测结果
             if result.boxes is not None:
+                self.logger.info(f"YOLO原始检测框数量: {len(result.boxes)}")
+
+            if result.boxes is not None and len(result.boxes) > 0:
                 boxes = result.boxes.xyxy.cpu().numpy()
                 confs = result.boxes.conf.cpu().numpy()
                 cls_ids = result.boxes.cls.cpu().numpy()
-                
+
                 names = result.names if hasattr(result, 'names') else {}
-                
+
+                self.logger.debug(f"置信度值: {confs}")
+
                 for i in range(len(boxes)):
                     x1, y1, x2, y2 = boxes[i]
                     conf = confs[i]
                     cls_id = int(cls_ids[i])
                     class_name = names.get(cls_id, f"Class_{cls_id}")
-                    
+
                     width = x2 - x1
                     height = y2 - y1
-                    
+
+                    self.logger.debug(f"检测框{i}: {class_name}, bbox=[{x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}], conf={conf:.3f}")
+
                     detections.append({
                         'bbox': [x1, y1, x2, y2],
                         'label': class_name,
@@ -1648,49 +2235,203 @@ class TargetSearchEnvironment:
         initial_state = self.capture_screen()
         return initial_state
 
+
+class ExperienceCollector:
+    """HDF5经验收集器"""
+    def __init__(self):
+        self.h5_file = None
+        self.state_shape = None
+        self.state_dtype = None
+        self.config = CONFIG
+        self.save_dir = self.config.get('EXPERIENCE_SAVE_DIR', './experience_data')
+        self.max_experiences = self.config.get('MAX_EXPERIENCES', 100000)
+        self.flush_interval = self.config.get('EXPERIENCE_FLUSH_INTERVAL', 100)
+        self.current_count = 0
+        self.buffer_count = 0
+        self.logger = setup_logging()
+
+    def _init_file(self, state_tensor):
+        """初始化HDF5文件"""
+        os.makedirs(self.save_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'experience_{timestamp}.h5'
+        filepath = os.path.join(self.save_dir, filename)
+
+        self.h5_file = h5py.File(filepath, 'w')
+        self.state_shape = state_tensor.shape
+
+        # 将PyTorch dtype转换为numpy dtype
+        if torch.is_tensor(state_tensor):
+            state_np = state_tensor.cpu().numpy()
+            self.state_dtype = state_np.dtype
+        else:
+            state_np = state_tensor
+            self.state_dtype = state_np.dtype
+
+        self.h5_file.create_dataset('states', (0,) + self.state_shape, maxshape=(self.max_experiences,) + self.state_shape, dtype='float32', chunks=True, compression='gzip')
+        self.h5_file.create_dataset('move_actions', (0,), maxshape=(self.max_experiences,), dtype='int64', chunks=True, compression='gzip')
+        self.h5_file.create_dataset('turn_actions', (0,), maxshape=(self.max_experiences,), dtype='int64', chunks=True, compression='gzip')
+        self.h5_file.create_dataset('move_steps', (0,), maxshape=(self.max_experiences,), dtype='float32', chunks=True, compression='gzip')
+        self.h5_file.create_dataset('turn_angles', (0,), maxshape=(self.max_experiences,), dtype='float32', chunks=True, compression='gzip')
+        self.h5_file.create_dataset('rewards', (0,), maxshape=(self.max_experiences,), dtype='float32', chunks=True, compression='gzip')
+        self.h5_file.create_dataset('dones', (0,), maxshape=(self.max_experiences,), dtype='bool', chunks=True, compression='gzip')
+
+        metadata = self.h5_file.create_group('metadata')
+        metadata.attrs['total_experiences'] = 0
+        metadata.attrs['last_update'] = datetime.now().isoformat()
+
+        self.logger.info(f"ExperienceCollector初始化完成: {filepath}")
+
+    def add_experience(self, state, move_action, turn_action, move_step, turn_angle, reward, done):
+        """添加一条经验"""
+        if self.h5_file is None:
+            self._init_file(state)
+
+        if self.current_count >= self.max_experiences:
+            self.logger.warning("已达到最大经验数，停止收集")
+            return
+
+        self.h5_file['states'].resize((self.current_count + 1,) + self.state_shape)
+        self.h5_file['states'][self.current_count] = state.cpu().numpy() if torch.is_tensor(state) else state
+
+        self.h5_file['move_actions'].resize((self.current_count + 1,))
+        self.h5_file['move_actions'][self.current_count] = move_action
+
+        self.h5_file['turn_actions'].resize((self.current_count + 1,))
+        self.h5_file['turn_actions'][self.current_count] = turn_action
+
+        self.h5_file['move_steps'].resize((self.current_count + 1,))
+        self.h5_file['move_steps'][self.current_count] = float(move_step)
+
+        self.h5_file['turn_angles'].resize((self.current_count + 1,))
+        self.h5_file['turn_angles'][self.current_count] = float(turn_angle)
+
+        self.h5_file['rewards'].resize((self.current_count + 1,))
+        self.h5_file['rewards'][self.current_count] = float(reward)
+
+        self.h5_file['dones'].resize((self.current_count + 1,))
+        self.h5_file['dones'][self.current_count] = bool(done)
+
+        self.current_count += 1
+        self.buffer_count += 1
+
+        if self.buffer_count >= self.flush_interval:
+            self.flush()
+
+    def update_last_experience(self, reward, done):
+        """更新最后一条经验的奖励和done标志"""
+        if self.current_count > 0:
+            idx = self.current_count - 1
+            self.h5_file['rewards'][idx] = float(reward)
+            self.h5_file['dones'][idx] = bool(done)
+
+    def flush(self):
+        """刷新到磁盘"""
+        if self.h5_file is not None:
+            self.h5_file['metadata'].attrs['total_experiences'] = self.current_count
+            self.h5_file['metadata'].attrs['last_update'] = datetime.now().isoformat()
+            self.h5_file.flush()
+            self.logger.info(f"已刷新{self.buffer_count}条经验到磁盘, 总数:{self.current_count}")
+            self.buffer_count = 0
+
+    def close(self):
+        """关闭文件"""
+        if self.h5_file is not None:
+            self.flush()
+            self.h5_file.close()
+            self.h5_file = None
+            self.logger.info("ExperienceCollector已关闭")
+
+    def get_stats(self):
+        """获取统计信息"""
+        if self.h5_file is None:
+            return {'total_experiences': 0, 'file_size_mb': 0}
+        import os
+        filepath = self.h5_file.filename
+        file_size_mb = os.path.getsize(filepath) / (1024 * 1024) if os.path.exists(filepath) else 0
+        return {'total_experiences': self.current_count, 'file_size_mb': file_size_mb}
+
+
+# 全局ExperienceCollector实例
+_experience_collector = None
+
+
+def get_experience_collector():
+    """获取全局ExperienceCollector实例"""
+    global _experience_collector
+    if _experience_collector is None:
+        config = CONFIG
+        if config.get('SAVE_EXPERIENCE', False):
+            _experience_collector = ExperienceCollector()
+    return _experience_collector
+
+
 class PPOAgent:
     """
-    PPO智能体(支持Ground-SAM)
+    PPO智能体(支持Ground-SAM + SLAM地图)
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim, use_ground_sam=None):
+    def __init__(self, state_dim, move_action_dim, turn_action_dim, use_ground_sam=None, use_slam_map=None):
         self.sam_mask_counter = 0  # SAM掩码保存计数器
         config = CONFIG
-        
+
         self.lr = config['LEARNING_RATE']
         self.betas = (0.9, 0.999)
         self.gamma = config['GAMMA']
         self.K_epochs = config['K_EPOCHS']
         self.eps_clip = config['EPS_CLIP']
-        
+
+        # 保存维度信息用于策略重置
+        self.state_dim = state_dim
+        self.move_action_dim = move_action_dim
+        self.turn_action_dim = turn_action_dim
+
         # 确定是否使用Ground-SAM
         if use_ground_sam is None:
             use_ground_sam = config.get('USE_GROUND_SAM', False)
-        
+
         self.use_ground_sam = use_ground_sam and GROUND_SAM_AVAILABLE
-        
+
+        # 确定是否使用SLAM地图
+        if use_slam_map is None:
+            use_slam_map = config.get('USE_SLAM_MAP', False)
+
+        self.use_slam_map = use_slam_map
+
         # 添加logger
         self.logger = setup_logging()
-        
+
         # 如果使用Ground-SAM,先初始化全局提取器
         if self.use_ground_sam:
             get_global_ground_sam_extractor()
             self.logger.info("PPO智能体已启用Ground-SAM特征提取")
-        
+
+        # 初始化SLAM地图构建器
+        if self.use_slam_map:
+            self.slam_map_builder = SLAMMapBuilder(
+                map_size=config.get('SLAM_MAP_SIZE', 100),
+                resolution=config.get('SLAM_MAP_RESOLUTION', 0.1)
+            )
+            self.logger.info("PPO智能体已启用SLAM地图构建")
+
         # Create policy networks
         self.policy = PolicyNetwork(
-            state_dim, move_action_dim, turn_action_dim, use_ground_sam=self.use_ground_sam
+            state_dim, move_action_dim, turn_action_dim,
+            use_ground_sam=self.use_ground_sam,
+            use_slam_map=self.use_slam_map
         )
-        
+
         # 优化器:只优化可训练参数,不优化冻结的SAM
         if self.use_ground_sam and hasattr(self.policy, 'sam_feature_encoder'):
             # 如果使用Ground-SAM,优化编码器和策略网络
             trainable_params = []
             trainable_params.extend(self.policy.sam_feature_encoder.parameters())
+            if self.use_slam_map and hasattr(self.policy, 'slam_map_encoder'):
+                trainable_params.extend(self.policy.slam_map_encoder.parameters())
             trainable_params.extend(self.policy.move_actor.parameters())
             trainable_params.extend(self.policy.turn_actor.parameters())
             trainable_params.extend(self.policy.action_param_head.parameters())
             trainable_params.extend(self.policy.critic.parameters())
-            
+
             self.optimizer = torch.optim.Adam(
                 trainable_params,
                 lr=self.lr,
@@ -1698,33 +2439,83 @@ class PPOAgent:
             )
         else:
             # 不使用Ground-SAM,优化所有参数
+            trainable_params = list(self.policy.parameters())
+            if self.use_slam_map and hasattr(self.policy, 'slam_map_encoder'):
+                trainable_params.extend(self.policy.slam_map_encoder.parameters())
+            self.optimizer = torch.optim.Adam(
+                trainable_params,
+                lr=self.lr,
+                betas=self.betas
+            )
+
+        self.policy_old = PolicyNetwork(
+            state_dim, move_action_dim, turn_action_dim,
+            use_ground_sam=self.use_ground_sam,
+            use_slam_map=self.use_slam_map
+        )
+        self.policy_old.load_state_dict(self.policy.state_dict())
+
+        self.MseLoss = nn.MSELoss()
+
+        # 添加梯度检查相关变量
+        self.gradient_norms = []
+        self.parameter_norms = []
+
+    def reset_policy(self):
+        """重置策略网络，用于检测到策略崩溃时"""
+        self.policy = PolicyNetwork(
+            self.state_dim, self.move_action_dim, self.turn_action_dim,
+            use_ground_sam=self.use_ground_sam
+        )
+
+        # 重新设置优化器
+        if self.use_ground_sam and hasattr(self.policy, 'sam_feature_encoder'):
+            trainable_params = []
+            trainable_params.extend(self.policy.sam_feature_encoder.parameters())
+            trainable_params.extend(self.policy.move_actor.parameters())
+            trainable_params.extend(self.policy.turn_actor.parameters())
+            trainable_params.extend(self.policy.action_param_head.parameters())
+            trainable_params.extend(self.policy.critic.parameters())
+
+            self.optimizer = torch.optim.Adam(
+                trainable_params,
+                lr=self.lr,
+                betas=self.betas
+            )
+        else:
             self.optimizer = torch.optim.Adam(
                 self.policy.parameters(),
                 lr=self.lr,
                 betas=self.betas
             )
-        
-        self.policy_old = PolicyNetwork(
-            state_dim, move_action_dim, turn_action_dim, use_ground_sam=self.use_ground_sam
-        )
+
+        # 更新旧策略
         self.policy_old.load_state_dict(self.policy.state_dict())
-        
-        self.MseLoss = nn.MSELoss()
-        
-        # 添加梯度检查相关变量
-        self.gradient_norms = []
-        self.parameter_norms = []
+
+        self.logger.warning("策略网络已重置")
 
     def act(self, state, memory, return_debug_info=False):
         # 预处理状态
         state_tensor = self._preprocess_state(state)
 
+        # 获取SLAM地图特征
+        slam_map_features = None
+        if self.use_slam_map and hasattr(self, 'slam_map_builder'):
+            slam_map_features = self.slam_map_builder._get_map_features()
+
         # 使用旧策略获取动作概率
         with torch.no_grad():
             if return_debug_info:
-                move_probs, turn_probs, action_params, state_val, debug_info = self.policy_old(state_tensor.unsqueeze(0), return_debug_info=True)
+                move_probs, turn_probs, action_params, state_val, debug_info = self.policy_old(
+                    state_tensor.unsqueeze(0),
+                    return_debug_info=True,
+                    slam_map_features=slam_map_features
+                )
             else:
-                move_probs, turn_probs, action_params, state_val = self.policy_old(state_tensor.unsqueeze(0))
+                move_probs, turn_probs, action_params, state_val = self.policy_old(
+                    state_tensor.unsqueeze(0),
+                    slam_map_features=slam_map_features
+                )
 
             # 检测策略崩溃：如果所有动作概率都接近0或1
             move_probs_squeezed = move_probs.squeeze()
@@ -1785,53 +2576,30 @@ class PPOAgent:
             [move_forward_step, turn_angle]  # 存储参数
         )
 
+        # 检查h5py是否可用
+        if h5py is not None:
+            try:
+                collector = get_experience_collector()
+                # 此时还不知道reward和done,先用0和False占位,后续会更新
+                collector.add_experience(
+                    state_tensor,
+                    move_action.item(),
+                    turn_action.item(),
+                    move_forward_step,
+                    turn_angle,
+                    0.0,  # 临时奖励,在update时更新
+                    False  # 临时done标志
+                )
+            except Exception as e:
+                self.logger.error(f"保存经验失败: {e}")
+        else:
+            self.logger.warning("h5py模块不可用，跳过经验保存")
+
+        # 准备返回值
         if return_debug_info:
-            return move_action.item(), turn_action.item(), move_forward_step, turn_angle, debug_info
+            return move_action, turn_action, move_forward_step, turn_angle, debug_info
         else:
-            return move_action.item(), turn_action.item(), move_forward_step, turn_angle
-
-    def reset_policy(self):
-        """
-        重置策略网络以防止策略崩溃
-        """
-        self.logger.warning("重置策略网络...")
-
-        # 从PPOAgent的__init__中保存的参数
-        move_action_dim = self.policy.move_actor[-1].out_features
-        turn_action_dim = self.policy.turn_actor[-1].out_features
-        use_ground_sam = self.use_ground_sam
-
-        # 创建新的策略网络（使用默认state_dim）
-        state_dim = (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640))
-        self.policy = PolicyNetwork(
-            state_dim, move_action_dim, turn_action_dim, use_ground_sam=use_ground_sam
-        )
-
-        # 重新设置优化器
-        if use_ground_sam and hasattr(self.policy, 'sam_feature_encoder'):
-            trainable_params = []
-            trainable_params.extend(self.policy.sam_feature_encoder.parameters())
-            trainable_params.extend(self.policy.move_actor.parameters())
-            trainable_params.extend(self.policy.turn_actor.parameters())
-            trainable_params.extend(self.policy.action_param_head.parameters())
-            trainable_params.extend(self.policy.critic.parameters())
-
-            self.optimizer = torch.optim.Adam(
-                trainable_params,
-                lr=self.lr,
-                betas=self.betas
-            )
-        else:
-            self.optimizer = torch.optim.Adam(
-                self.policy.parameters(),
-                lr=self.lr,
-                betas=self.betas
-            )
-
-        # 更新旧策略
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-        self.logger.warning("策略网络已重置")
+            return move_action, turn_action, move_forward_step, turn_angle
 
     def update(self, memory):
         # 计算折扣奖励
@@ -2022,25 +2790,30 @@ def create_environment_and_agent():
     """
     # 创建可视化器
     visualizer = RealTimeVisualizer()
-    
+
     # 创建环境
     env = TargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
-    
+
     # 为环境添加可视化功能
     add_visualization_to_environment(TargetSearchEnvironment, visualizer)
-    
+
     move_action_dim = 4  # forward, backward, strafe_left, strafe_right
     turn_action_dim = 2  # turn_left, turn_right
-    
+
     ppo_agent = PPOAgent(
-        (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640)), 
+        (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640)),
         move_action_dim,
         turn_action_dim
     )
-    
+
+    # 如果智能体启用了SLAM地图，将slam_map_builder挂载到环境上，供可视化使用
+    if hasattr(ppo_agent, 'slam_map_builder'):
+        env.slam_map_builder = ppo_agent.slam_map_builder
+        print("SLAM地图构建器已挂载到环境，可视化将显示SLAM小地图")
+
     # 为智能体添加可视化功能
     add_visualization_to_agent(PPOAgent, visualizer)
-    
+
     return env, ppo_agent, visualizer
 
 
@@ -2202,7 +2975,169 @@ def run_episode(env, ppo_agent, visualizer, episode_num, total_episodes, trainin
             detection['label'].lower() == 'climb' or 'climb' in detection['label'].lower()
             for detection in detection_results
         )
-        success_flag = climb_detected
+
+
+# 重复的initialize_model函数已删除,使用上面第2126行的正确版本
+# 以下函数已弃用,保留用于向后兼容
+# def initialize_model(model_path, load_existing=False):
+#     """
+#     初始化模型
+#     """
+#     config = CONFIG
+#
+#     # 初始化环境
+#     env = config['ENV']()  # 这个键不存在,导致KeyError
+#
+#     # 初始化PPO智能体
+#     ppo_agent = PPOAgent(
+#         state_dim=env.observation_space.shape[0],
+#         action_dim=env.action_space.shape[0],
+#         lr=config['LEARNING_RATE'],
+#         gamma=config['GAMMA'],
+#         K_epochs=config['K_EPOCHS'],
+#         eps_clip=config['EPS_CLIP'],
+#         logger=config['LOGGER']
+#     )
+#
+#     # 初始化可视化器
+#     visualizer = Visualizer(env, ppo_agent, config['VISUALIZER_PORT'])
+#
+#     start_episode = 0
+#     if load_existing:
+#         if os.path.exists(model_path):
+#             ppo_agent.load_checkpoint(model_path)
+#             print(f"模型已加载: {model_path}")
+#             start_episode = int(model_path.split('_')[-1].split('.')[0])
+#         else:
+#             print(f"模型文件不存在: {model_path}")
+#
+#     return env, ppo_agent, visualizer, start_episode
+
+
+# 旧式经验缓冲区(用于保持向后兼容)
+EXPERIENCE_BUFFER = deque(maxlen=10000)
+
+
+def train_with_experience_buffer(ppo_agent, experience_buffer):
+    """
+    使用经验池训练PPO智能体
+    """
+    for _ in range(ppo_agent.K_epochs):
+        for state, action, reward, next_state, done in experience_buffer:
+            ppo_agent.update(state, action, reward, next_state, done)
+
+
+def save_experience_buffer(buffer, path):
+    """
+    保存经验池到本地文件
+    """
+    with open(path, 'wb') as f:
+        pickle.dump(list(buffer), f)
+
+def load_experience_buffer(path):
+    """
+    从本地文件加载经验池
+    """
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            experiences = pickle.load(f)
+        return deque(experiences, maxlen=10000)
+    return deque(maxlen=10000)
+
+def perform_training_loop(env, ppo_agent, visualizer, start_episode, total_episodes):
+    """
+    执行训练循环
+    """
+    global EXPERIENCE_BUFFER
+    
+    scores = deque(maxlen=50)
+    total_rewards = deque(maxlen=50)
+    final_areas = deque(maxlen=50)
+    
+    # 训练统计变量
+    training_stats = {
+        'episode_count': 0,
+        'successful_episodes': 0,
+        'average_reward_history': []
+    }
+    
+    print(f"开始训练循环，从第 {start_episode} 轮到第 {total_episodes} 轮")
+    loop_start_time = time.time()
+    
+    for episode in range(start_episode, total_episodes):
+        print_debug = episode % 50 == 0  # 每50轮打印一次详细信息
+        result = run_episode(env, ppo_agent, visualizer, episode, total_episodes, training_mode=True, print_debug=print_debug)
+        
+        # 更新统计数据
+        scores.append(result['step_count'])
+        total_rewards.append(result['total_reward'])
+        final_areas.append(result['final_area'])
+        training_stats['episode_count'] += 1
+        
+        if result['success_flag']:
+            training_stats['successful_episodes'] += 1
+        
+        # 每5轮保存经验并更新策略
+        if (episode + 1) % 5 == 0:
+            # 保存当前经验池
+            experience_path = f"experience_buffer_ep{episode+1}.pkl"
+            save_experience_buffer(EXPERIENCE_BUFFER, experience_path)
+            
+            # 使用经验池训练多次
+            if len(EXPERIENCE_BUFFER) > 0:
+                print(f"Episode {episode+1}: 使用经验池训练，经验数量: {len(EXPERIENCE_BUFFER)}")
+                train_with_experience_buffer(ppo_agent, EXPERIENCE_BUFFER)
+        
+        # 每10轮保存一次检查点
+        if (episode + 1) % 10 == 0:
+            checkpoint_path = f'ppo_model_checkpoint_ep{episode+1}.pth'
+            ppo_agent.save_checkpoint(checkpoint_path)
+            print(f"检查点已保存: {checkpoint_path}")
+
+    # 训练结束后保存最终的经验池
+    final_experience_path = "final_experience_buffer.pkl"
+    save_experience_buffer(EXPERIENCE_BUFFER, final_experience_path)
+    print(f"最终经验池已保存: {final_experience_path}")
+    
+    return training_stats
+
+
+def run_episode(env, ppo_agent, visualizer, episode_num, total_episodes, training_mode=True, print_debug=False):
+    """
+    运行一个episode
+    """
+    state = env.reset()
+    done = False
+    total_reward = 0
+    step_count = 0
+    final_area = 0
+    success_flag = False
+    detection_results = []
+    
+    while not done:
+        action = ppo_agent.select_action(state)
+        next_state, reward, done, info = env.step(action)
+        
+        total_reward += reward
+        step_count += 1
+        
+        if training_mode:
+            EXPERIENCE_BUFFER.append((state, action, reward, next_state, done))
+        
+        state = next_state
+        
+        if print_debug:
+            print(f"Episode {episode_num}/{total_episodes}: Step {step_count}, Reward {reward}, Total Reward {total_reward}")
+        
+        if 'detection_results' in info:
+            detection_results.append(info['detection_results'])
+        
+        if 'final_area' in info:
+            final_area = info['final_area']
+        
+        if 'climb_detected' in info:
+            climb_detected = info['climb_detected']
+            success_flag = climb_detected
     
     # 在训练模式下，需要更新智能体
     if training_mode and len(episode_memory.rewards) > 0:
@@ -2232,63 +3167,6 @@ def run_episode(env, ppo_agent, visualizer, episode_num, total_episodes, trainin
         'recent_detection_images': recent_detection_images
     }
 
-def perform_training_loop(env, ppo_agent, visualizer, start_episode, total_episodes):
-    """
-    执行训练循环
-    """
-    scores = deque(maxlen=50)
-    total_rewards = deque(maxlen=50)
-    final_areas = deque(maxlen=50)
-    
-    # 训练统计变量
-    training_stats = {
-        'episode_count': 0,
-        'successful_episodes': 0,
-        'average_reward_history': []
-    }
-    
-    print(f"开始训练循环，从第 {start_episode} 轮到第 {total_episodes} 轮")
-    loop_start_time = time.time()
-    
-    for episode in range(start_episode, total_episodes):
-        print_debug =   True  # 每50轮打印一次详细信息
-        result = run_episode(env, ppo_agent, visualizer, episode, total_episodes, training_mode=True, print_debug=print_debug)
-        
-        # 更新统计数据
-        scores.append(result['step_count'])
-        total_rewards.append(result['total_reward'])
-        final_areas.append(result['final_area'])
-        training_stats['episode_count'] += 1
-        
-        if result['success_flag']:
-            training_stats['successful_episodes'] += 1
-        
-        # 每10轮保存一次检查点
-        if (episode + 1) % 10 == 0:
-            checkpoint_path = f"{CONFIG['MODEL_PATH'].rsplit('.', 1)[0]}_checkpoint_ep_{episode + 1}.pth"
-            ppo_agent.save_checkpoint(checkpoint_path, episode + 1)
-            print(f"检查点已保存: {checkpoint_path}")
-        
-        print(f"训练进度: {episode+1}/{total_episodes}")
-        
-      
-        if episode % 10 == 0:
-            current_time = time.time()
-            elapsed_time = current_time - loop_start_time
-            
-            avg_reward = np.mean(total_rewards) if total_rewards else 0
-            success_rate = training_stats['successful_episodes'] / training_stats['episode_count'] if training_stats['episode_count'] > 0 else 0
-            
-            print(f"Episode数 {episode}: 平均奖励: {avg_reward:.3f}, "
-                  f"成功率: {success_rate:.3f}, "
-                  f"总奖励: {result['total_reward']:.3f}, "
-                  f"步数: {result['step_count']}, "
-                  f"成功: {result['success_flag']}")
-            print(f"当前训练耗时: {elapsed_time:.2f} 秒 ({elapsed_time/60:.2f} 分钟)")
-    
-    return training_stats
-
-
 def continue_training_ppo_agent(model_path=None):
     """
     基于现有模型继续训练
@@ -2296,46 +3174,128 @@ def continue_training_ppo_agent(model_path=None):
     config = CONFIG
     if model_path is None:
         model_path = config['MODEL_PATH']
-    
+
     print(f"基于现有模型继续训练: {model_path}, 额外训练 {config['EPISODES']} 轮")
-    
+
     # 开始计时
     start_time = time.time()
-    
-    # 初始化模型
+
+    # 初始化模型(使用正确的initialize_model版本)
     env, ppo_agent, visualizer, start_episode = initialize_model(model_path, load_existing=True)
-    
+
     total_training_episodes = start_episode + config['EPISODES']
     print(f"从第 {start_episode} 轮开始，继续训练 {config['EPISODES']} 轮，总共到第 {total_training_episodes} 轮")
-    
+
     # 启动可视化线程
     def run_visualizer():
         visualizer.run()
-    
+
     visualizer_thread = Thread(target=run_visualizer, daemon=True)
     visualizer_thread.start()
-    
-    # 执行训练循环
-    training_stats = perform_training_loop(env, ppo_agent, visualizer, start_episode, total_training_episodes)
-    
+
+    # 使用train_with_visualization进行训练(已集成ExperienceCollector)
+    # 训练循环
+    for episode in range(start_episode, total_training_episodes):
+        print(f"\n=== Episode {episode} Started ===")
+
+        # 设置当前episode号
+        env._current_episode = episode
+
+        state = env.reset()
+        memory = Memory()
+        total_reward = 0
+
+        for t in range(env.max_steps):
+            # 先提取Ground-SAM特征（如果启用）
+            ground_sam_features = None
+            if CONFIG.get('USE_GROUND_SAM', False) and GROUND_SAM_AVAILABLE:
+                try:
+                    extractor = get_global_ground_sam_extractor()
+                    if extractor is not None:
+                        # 将state转换为numpy图像
+                        if isinstance(state, torch.Tensor):
+                            state_np = state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                        else:
+                            state_np = state
+
+                        # 提取Ground-SAM特征(不可视化,保持快速)
+                        ground_sam_features = extractor.extract_features(
+                            state_np,
+                            use_auto_segmentation=False  # 不进行自动分割,保持快速
+                        )
+
+                        logger = logging.getLogger('ppo_agent_logger')
+                except Exception as e:
+                    logger = logging.getLogger('ppo_agent_logger')
+                    logger.error(f"Ground-SAM特征提取失败: {e}")
+
+            # 智能体执行动作
+            move_action, turn_action, move_step, turn_angle, debug_info = ppo_agent.act(
+                state, memory, return_debug_info=True
+            )
+
+            # 执行环境步骤
+            next_state, reward, done, detections = env.step(
+                move_action, turn_action, move_step, turn_angle
+            )
+
+            # 更新记忆
+            memory.rewards[-1] = reward
+            memory.is_terminals[-1] = done
+
+            total_reward += reward
+            state = next_state
+
+            # 更新可视化信息
+            visualizer.update_agent_info({
+                'episode': episode,
+                'step': t,
+                'total_reward': total_reward,
+                'reward': reward,
+                'done': done,
+                'move_action': move_action,
+                'turn_action': turn_action,
+                'move_step': round(move_step, 2),
+                'turn_angle': round(turn_angle, 2)
+            })
+
+            if done:
+                break
+
+        # 更新策略
+        ppo_agent.update(memory)
+
+        # 记录训练信息
+        print(f"Episode {episode}, Total Reward: {total_reward:.2f}, Steps: {t+1}")
+
+        # 保存检查点
+        if episode % 10 == 0:
+            ppo_agent.save_checkpoint(f'ppo_model_checkpoint_ep{episode}.pth')
+
+        # 定期输出经验收集统计
+        if episode % 50 == 0:
+            collector = get_experience_collector()
+            stats = collector.get_stats()
+            print(f"经验收集统计: 总数={stats['total_experiences']}, 文件大小={stats['file_size_mb']:.2f}MB")
+
     # 结束计时
     end_time = time.time()
     training_duration = end_time - start_time
-    
+
     print(f"继续训练完成！")
     print(f"训练耗时: {training_duration:.2f} 秒 ({training_duration/60:.2f} 分钟)")
-    
+
     torch.save(ppo_agent.policy.state_dict(), model_path)
     print(f"更新后的PPO模型已保存为 {model_path}")
-    
+
+    # 保存经验数据
+    collector = get_experience_collector()
+    collector.close()
+
     return {
-        "status": "success", 
-        "message": f"继续训练完成，共训练了 {config['EPISODES']} 轮，耗时 {training_duration:.2f} 秒", 
+        "status": "success",
+        "message": f"继续训练完成，共训练了 {config['EPISODES']} 轮，耗时 {training_duration:.2f} 秒",
         "final_episode": total_training_episodes,
-        "training_stats": {
-            "successful_episodes": training_stats['successful_episodes'],
-            "total_episodes": training_stats['episode_count']
-        },
         "training_duration": training_duration
     }
 
@@ -2346,46 +3306,127 @@ def train_new_ppo_agent(model_path=None):
     """
     if model_path is None:
         model_path = CONFIG['MODEL_PATH']
-    
+
     print(f"开始从头训练PPO智能体: {model_path}")
-    
+
     # 开始计时
     start_time = time.time()
-    
-    # 初始化模型（不加载现有模型）
+
+    # 初始化模型(不加载现有模型)
     env, ppo_agent, visualizer, start_episode = initialize_model(model_path, load_existing=False)
-    
+
     total_training_episodes = CONFIG['EPISODES']
     print(f"从第 {start_episode} 轮开始，训练 {CONFIG['EPISODES']} 轮，总共到第 {total_training_episodes} 轮")
-    
+
     # 启动可视化线程
     def run_visualizer():
         visualizer.run()
-    
+
     visualizer_thread = Thread(target=run_visualizer, daemon=True)
     visualizer_thread.start()
-    
-    # 执行训练循环
-    training_stats = perform_training_loop(env, ppo_agent, visualizer, start_episode, total_training_episodes)
-    
+
+    # 使用train_with_visualization进行训练
+    for episode in range(start_episode, total_training_episodes):
+        print(f"\n=== Episode {episode} Started ===")
+
+        # 设置当前episode号
+        env._current_episode = episode
+
+        state = env.reset()
+        memory = Memory()
+        total_reward = 0
+
+        for t in range(env.max_steps):
+            # 先提取Ground-SAM特征（如果启用）
+            ground_sam_features = None
+            if CONFIG.get('USE_GROUND_SAM', False) and GROUND_SAM_AVAILABLE:
+                try:
+                    extractor = get_global_ground_sam_extractor()
+                    if extractor is not None:
+                        # 将state转换为numpy图像
+                        if isinstance(state, torch.Tensor):
+                            state_np = state.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+                        else:
+                            state_np = state
+
+                        # 提取Ground-SAM特征(不可视化,保持快速)
+                        ground_sam_features = extractor.extract_features(
+                            state_np,
+                            use_auto_segmentation=False
+                        )
+
+                        logger = logging.getLogger('ppo_agent_logger')
+                except Exception as e:
+                    logger = logging.getLogger('ppo_agent_logger')
+                    logger.error(f"Ground-SAM特征提取失败: {e}")
+
+            # 智能体执行动作
+            move_action, turn_action, move_step, turn_angle, debug_info = ppo_agent.act(
+                state, memory, return_debug_info=True
+            )
+
+            # 执行环境步骤
+            next_state, reward, done, detections = env.step(
+                move_action, turn_action, move_step, turn_angle
+            )
+
+            # 更新记忆
+            memory.rewards[-1] = reward
+            memory.is_terminals[-1] = done
+
+            total_reward += reward
+            state = next_state
+
+            # 更新可视化信息
+            visualizer.update_agent_info({
+                'episode': episode,
+                'step': t,
+                'total_reward': total_reward,
+                'reward': reward,
+                'done': done,
+                'move_action': move_action,
+                'turn_action': turn_action,
+                'move_step': round(move_step, 2),
+                'turn_angle': round(turn_angle, 2)
+            })
+
+            if done:
+                break
+
+        # 更新策略
+        ppo_agent.update(memory)
+
+        # 记录训练信息
+        print(f"Episode {episode}, Total Reward: {total_reward:.2f}, Steps: {t+1}")
+
+        # 保存检查点
+        if episode % 10 == 0:
+            ppo_agent.save_checkpoint(f'ppo_model_checkpoint_ep{episode}.pth')
+
+        # 定期输出经验收集统计
+        if episode % 50 == 0:
+            collector = get_experience_collector()
+            stats = collector.get_stats()
+            print(f"经验收集统计: 总数={stats['total_experiences']}, 文件大小={stats['file_size_mb']:.2f}MB")
+
     # 结束计时
     end_time = time.time()
     training_duration = end_time - start_time
-    
+
     print(f"从头训练完成！")
     print(f"训练耗时: {training_duration:.2f} 秒 ({training_duration/60:.2f} 分钟)")
-    
+
     torch.save(ppo_agent.policy.state_dict(), model_path)
     print(f"新训练的PPO模型已保存为 {model_path}")
-    
+
+    # 保存经验数据
+    collector = get_experience_collector()
+    collector.close()
+
     return {
-        "status": "success", 
-        "message": f"从头训练完成，共训练了 {CONFIG['EPISODES']} 轮，耗时 {training_duration:.2f} 秒", 
+        "status": "success",
+        "message": f"从头训练完成，共训练了 {CONFIG['EPISODES']} 轮，耗时 {training_duration:.2f} 秒",
         "final_episode": total_training_episodes,
-        "training_stats": {
-            "successful_episodes": training_stats['successful_episodes'],
-            "total_episodes": training_stats['episode_count']
-        },
         "training_duration": training_duration
     }
 
@@ -2515,15 +3556,20 @@ def train_with_visualization():
     
     # 为环境和智能体添加可视化功能
     add_visualization_to_environment(TargetSearchEnvironment, visualizer)
-    
+
     # 初始化环境和智能体
     env = TargetSearchEnvironment()
-    
+
     state_dim = (3, CONFIG['IMAGE_HEIGHT'], CONFIG['IMAGE_WIDTH'])
     move_action_dim = 4
     turn_action_dim = 2
     agent = PPOAgent(state_dim, move_action_dim, turn_action_dim)
-    
+
+    # 如果智能体启用了SLAM地图，将slam_map_builder挂载到环境上，供可视化使用
+    if hasattr(agent, 'slam_map_builder'):
+        env.slam_map_builder = agent.slam_map_builder
+        print("SLAM地图构建器已挂载到环境，可视化将显示SLAM小地图")
+
     # 为智能体添加可视化功能
     add_visualization_to_agent(PPOAgent, visualizer)
     

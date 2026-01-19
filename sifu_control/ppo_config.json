@@ -51,5 +51,18 @@
     "USE_GROUND_SAM": true,
     "SAM_MODEL_TYPE": "vit_b",
     "DINO_MODEL_NAME": "IDEA-Research/grounding-dino-tiny",
-    "SAM_FEATURE_DIM": 256
+    "SAM_FEATURE_DIM": 256,
+
+    "_comment_sam_viz": "SAM掩码可视化非常耗时(2-5秒/帧),已禁用以提升训练速度。如需调试,在代码中手动设置visualize_mask=True",
+    "SAM_ENABLE_VISUALIZATION": false,
+
+    "SAVE_EXPERIENCE": true,
+    "EXPERIENCE_SAVE_DIR": "./experience_data",
+    "MAX_EXPERIENCES": 100000,
+    "EXPERIENCE_FLUSH_INTERVAL": 100,
+
+    "_comment_slam": "SLAM地图配置 - 启用后会构建语义占用栅格地图，并融合到PPO状态中",
+    "USE_SLAM_MAP": true,
+    "SLAM_MAP_SIZE": 100,
+    "SLAM_MAP_RESOLUTION": 0.1
 }
