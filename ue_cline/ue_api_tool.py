@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import os
 import subprocess
 import time
@@ -8,8 +10,13 @@ import shutil
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
- 
+
 mcp = FastMCP("ue_tool")
+
+def log(message=""):
+    """禁用日志输出，避免干扰 MCP 的 JSON-RPC 通信"""
+    # 完全禁用日志输出，不执行任何操作
+    pass
 def activate_ue_window():
     """
     激活ue窗口（精确匹配窗口标题），如果没有运行则启动ue
@@ -17,59 +24,59 @@ def activate_ue_window():
     try:
         import pygetwindow as gw
     except ImportError:
-        print("pygetwindow未安装，请运行: pip install pygetwindow")
+        log("pygetwindow未安装，请运行: pip install pygetwindow")
         return False
-    
+
     try:
         # 获取所有窗口
         all_windows = gw.getAllWindows()
         ue_window = None
-        
+
         for window in all_windows:
             window_title = window.title.strip()
-            print(f"检查窗口: {window_title}")
-            
+            log(f"检查窗口: {window_title}")
+
             # 修改匹配逻辑以包含中文标题
-            if ('虚幻编辑器' in window_title or 
-                'Unreal Editor' in window_title or 
+            if ('虚幻编辑器' in window_title or
+                'Unreal Editor' in window_title or
                 'UE4Editor' in window_title or
                 window_title == 'ue' or  # 基础标题
-                (window_title.startswith('ue') and 
+                (window_title.startswith('ue') and
                  not any(exclude in window_title.lower() for exclude in ['vscode', 'visual studio', 'code']))):
-                
+
                 # 额外检查确保不是VSCode或其他编辑器
                 if ' - ' not in window_title or 'ue.exe' in window_title.lower() or '虚幻编辑器' in window_title:
                     ue_window = window
                     break
-        
+
         if ue_window:
-            print(f"激活窗口: {ue_window.title}")
-            
+            log(f"激活窗口: {ue_window.title}")
+
             try:
                 import win32gui
                 import win32con
-                
+
                 hwnd = ue_window._hWnd
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                 win32gui.SetForegroundWindow(hwnd)
-                
-                print(f"窗口已放到最前端: {ue_window.title}")
+
+                log(f"窗口已放到最前端: {ue_window.title}")
                 return True
             except ImportError:
-                print("pywin32未安装，请运行: pip install pywin32")
+                log("pywin32未安装，请运行: pip install pywin32")
                 if hasattr(ue_window, 'isMinimized') and ue_window.isMinimized:
                     ue_window.restore()
                 ue_window.activate()
-                print("ue窗口已激活（使用pygetwindow方法）")
+                log("ue窗口已激活（使用pygetwindow方法）")
                 return True
         else:
-            print("未找到ue窗口，正在启动ue...")
+            log("未找到ue窗口，正在启动ue...")
             # 启动ue
             start_ue()
             return False
 
     except Exception as e:
-        print(f"激活ue窗口时出错: {e}")
+        log(f"激活ue窗口时出错: {e}")
         return False
 
 def send_python_code_request(code=None, host="localhost", port=8070):
@@ -80,25 +87,25 @@ def send_python_code_request(code=None, host="localhost", port=8070):
         # 创建socket连接
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((host, port))
-        
+
         # 准备数据
         payload = {
             "code": code or "unreal.SystemLibrary.print_string(None, 'Hello from remote execution!', True, True, unreal.LinearColor(0,1,0,1), 5.0)"
         }
-        
+
         # 发送JSON数据
         json_data = json.dumps(payload)
         sock.send(json_data.encode('utf-8'))
-        
+
         # 接收响应
         response = sock.recv(4096).decode('utf-8')
-        print(f"服务器响应: {response}")
-        
+        log(f"服务器响应: {response}")
+
         sock.close()
         return {"status": "success", "result": response}
-        
+
     except Exception as e:
-        print(f"发送请求时出错: {str(e)}")
+        log(f"发送请求时出错: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 def send_fbx_import_request(host="localhost", port=8070):
@@ -443,128 +450,140 @@ def start_ue():
     启动ue（在后台进程启动，不阻塞当前线程）
     """
     ue_path = r"D:\UE_4.26\Engine\Binaries\Win64\UE4Editor.exe"
-    
+
     if not os.path.exists(ue_path):
-        print(f"错误: 找不到ue可执行文件: {ue_path}")
+        log(f"错误: 找不到ue可执行文件: {ue_path}")
         return False
-    
+
     try:
         # 使用CREATE_NEW_CONSOLE标志启动ue，使其在独立的进程中运行
-        subprocess.Popen([ue_path], 
+        subprocess.Popen([ue_path],
                         creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS)
-        print(f"ue已在后台启动: {ue_path}")
-        
+        log(f"ue已在后台启动: {ue_path}")
+
         time.sleep(2)  # 短暂延迟确保进程已开始启动
         return True
     except Exception as e:
-        print(f"启动ue时出错: {e}")
+        log(f"启动ue时出错: {e}")
         return False
-
-import os
-import shutil
-import subprocess
-import sys
-from pathlib import Path
 
 @mcp.tool()
 def build_sifu_mod():
     """
     执行Sifu MOD构建流程
     """
-    print("=" * 32)
-    print("    开始执行 MOD 构建流程")
-    print("=" * 32)
-    print()
+    log("=" * 32)
+    log("    开始执行 MOD 构建流程")
+    log("=" * 32)
+    log()
 
     # ================ 第一步：删除 Characters 中的 _Shared 和 Skeleton ================
     char_dir = Path(r"E:\blender\ue4\character\Saved\Cooked\WindowsNoEditor\new\Content\Characters")
 
     if (char_dir / "_Shared").exists():
         shutil.rmtree(char_dir / "_Shared")
-        print(" 已删除 _Shared 文件夹")
+        log(" 已删除 _Shared 文件夹")
 
     if (char_dir / "Skeleton").exists():
         shutil.rmtree(char_dir / "Skeleton")
-        print(" 已删除 Skeleton 文件夹")
+        log(" 已删除 Skeleton 文件夹")
 
-    print()
+    log()
 
     # ================ 第二步：复制 Characters 到 pakchunk99-XXX-P\Sifu\Content\Characters ================
     source_dir = char_dir
     target_char_dir = Path(r"E:\blender\pakchunk99-XXX-P\Sifu\Content\Characters")
 
     if not source_dir.exists():
-        print(" 错误：源目录不存在！")
-        print(f"  {source_dir}")
-        input("按任意键退出...")
-        sys.exit(1)
+        log(" 错误：源目录不存在！")
+        log(f"  {source_dir}")
+        return {"status": "error", "message": f"源目录不存在: {source_dir}"}
 
     if target_char_dir.exists():
         shutil.rmtree(target_char_dir)
-        print(" 已删除旧的目标 Characters 文件夹")
+        log(" 已删除旧的目标 Characters 文件夹")
 
-    print("正在复制 Characters 到 Sifu 项目...")
+    log("正在复制 Characters 到 Sifu 项目...")
     try:
         shutil.copytree(source_dir, target_char_dir)
-        print(" Characters 复制成功")
+        log(" Characters 复制成功")
     except Exception as e:
-        print(f" 复制失败：{e}")
-        input("按任意键退出...")
-        sys.exit(1)
+        log(f" 复制失败：{e}")
+        return {"status": "error", "message": f"复制失败: {e}"}
 
-    print()
+    log()
 
     # ================ 第三步：调用 UnrealPak 打包生成 .pak 文件 ================
-    unreal_pak_script = Path(r"E:\blender\Sifu-MOD-TOOL\UnrealPak\UnrealPak-With-Compression.bat")
+    unreal_pak_exe = Path(r"E:\blender\Sifu-MOD-TOOL\UnrealPak\UnrealPak.exe")
     pak_folder = Path(r"E:\blender\pakchunk99-XXX-P")
+    filelist_path = Path(r"E:\blender\Sifu-MOD-TOOL\UnrealPak\filelist.txt")
 
-    if not unreal_pak_script.exists():
-        print(" 错误：UnrealPak 打包脚本不存在！")
-        print(f"  {unreal_pak_script}")
-        input("按任意键退出...")
-        sys.exit(1)
+    if not unreal_pak_exe.exists():
+        log(" 错误：UnrealPak.exe 不存在！")
+        log(f"  {unreal_pak_exe}")
+        return {"status": "error", "message": f"UnrealPak.exe 不存在: {unreal_pak_exe}"}
 
     # 删除已存在的 .pak 文件
     pak_file = Path(f"{pak_folder}.pak")
     if pak_file.exists():
-        print(f"正在删除已存在的 .pak 文件: {pak_file}")
+        log(f"正在删除已存在的 .pak 文件: {pak_file}")
         pak_file.unlink()
-        print(" 已删除旧的 .pak 文件")
+        log(" 已删除旧的 .pak 文件")
 
-    print("正在调用 UnrealPak 打包...")
+    # 创建 filelist.txt（与批处理文件相同的方式）
+    log("正在创建文件列表...")
     try:
-        # 使用 subprocess.run 并重定向输入输出以防止挂起
+        with open(filelist_path, 'w', encoding='utf-8') as f:
+            f.write(f'"{pak_folder}\\*.*" "..\\..\\..\\Characters"')
+        log(" 文件列表创建成功")
+    except Exception as e:
+        log(f" 创建文件列表失败：{e}")
+        return {"status": "error", "message": f"创建文件列表失败: {e}"}
+
+    log("正在调用 UnrealPak 打包...")
+    try:
+        # 直接调用 UnrealPak.exe
+        cmd = f'"{unreal_pak_exe}" "{pak_file}" -create="{filelist_path}" -compress'
+        log(f"执行命令: {cmd}")
+
         result = subprocess.run(
-            [str(unreal_pak_script), str(pak_folder)],
-            stdin=subprocess.DEVNULL,  # 重定向标准输入
-            stdout=subprocess.PIPE,    # 重定向标准输出
-            stderr=subprocess.PIPE,    # 重定向标准错误
-            text=True                  # 返回字符串而非字节
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='gbk',
+            errors='replace'
         )
+
         if result.returncode != 0:
-            print(f" 打包失败！返回码: {result.returncode}")
-            print(f"错误信息: {result.stderr}")
-            input("按任意键退出...")
-            sys.exit(1)
+            log(f" 打包警告！返回码: {result.returncode}")
+            log(f"错误信息: {result.stderr}")
+            log(f"输出信息: {result.stdout}")
+            # 不要立即返回错误，先检查 .pak 文件是否已生成
         else:
-            print(" 打包成功！")
-            print(result.stdout)
-    except subprocess.CalledProcessError as e:
-        print(f" 打包过程中出现错误：{e}")
-        input("按任意键退出...")
-        sys.exit(1)
+            log(" 打包成功！")
+            try:
+                log(result.stdout)
+            except Exception:
+                log("(输出包含无法显示的字符)")
+    except Exception as e:
+        log(f" 打包过程中出现错误：{e}")
+        import traceback
+        error_detail = traceback.format_exc()
+        log(f"详细错误: {error_detail}")
+        return {"status": "error", "message": f"打包过程中出现错误: {e}", "detail": error_detail}
 
     # 检查是否生成了 .pak 文件
     pak_file = Path(f"{pak_folder}.pak")
     if pak_file.exists():
-        print(" .pak 文件已生成：")
-        print(f"  {pak_file}")
+        log(" .pak 文件已生成：")
+        log(f"  {pak_file}")
     else:
-        print(" 打包失败：未生成 .pak 文件！")
-        input("按任意键退出...")
-        sys.exit(1)
+        log(" 打包失败：未生成 .pak 文件！")
+        return {"status": "error", "message": "打包失败：未生成 .pak 文件"}
 
-    print()
+    log()
 
     # ================ 第四步：将 .pak 文件复制到游戏 MOD 目录 ================
     target_mod_dir = Path(r"G:\Sifu\Sifu\Content\Paks\~mods")
@@ -572,30 +591,28 @@ def build_sifu_mod():
 
     # 确保 ~mods 目录存在
     if not target_mod_dir.exists():
-        print(" 错误：MOD 目录不存在！请确认游戏路径正确。")
-        print(f"  {target_mod_dir}")
-        input("按任意键退出...")
-        sys.exit(1)
+        log(" 错误：MOD 目录不存在！请确认游戏路径正确。")
+        log(f"  {target_mod_dir}")
+        return {"status": "error", "message": f"MOD 目录不存在: {target_mod_dir}"}
 
     try:
         shutil.copy2(pak_file, target_pak)
-        print(" 已替换 MOD 文件到：")
-        print(f"  {target_pak}")
+        log(" 已替换 MOD 文件到：")
+        log(f"  {target_pak}")
     except Exception as e:
-        print(f" 复制 MOD 文件失败：{e}")
-        input("按任意键退出...")
-        sys.exit(1)
+        log(f" 复制 MOD 文件失败：{e}")
+        return {"status": "error", "message": f"复制 MOD 文件失败: {e}"}
 
-    print()
-
+    log()
 
 
-    print()
-    print("=" * 32)
-    print(" 所有操作已完成！游戏已启动。")
-    print("=" * 32)
-    print()
-    
+
+    log()
+    log("=" * 32)
+    log(" 所有操作已完成！游戏已启动。")
+    log("=" * 32)
+    log()
+
     return {"status": "success", "result": "MOD build completed and game launched"}
 
 if __name__ == "__main__":
