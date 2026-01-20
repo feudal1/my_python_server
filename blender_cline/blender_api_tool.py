@@ -100,8 +100,8 @@ def activate_blender_window():
         else:
             print("未找到Blender窗口，正在启动Blender...")
             # 启动Blender
-            start_blender()
-            return False
+            
+            return start_blender()
 
     except Exception as e:
         print(f"激活Blender窗口时出错: {e}")

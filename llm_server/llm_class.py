@@ -7,7 +7,7 @@ import base64
 import requests
 from io import BytesIO
 from PIL import Image
-dotenv_path = r'my_python_server_private\.env'
+dotenv_path = r'E:\code\my_python_server\my_python_server_private\.env'
 load_dotenv(dotenv_path)
 import ssl
 import urllib3
