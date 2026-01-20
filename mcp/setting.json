@@ -30,5 +30,21 @@
       ],
       "disabled": false,
       "autoApprove": []
-  }}
+  },
+    "ocr-tool": {
+      "command": "E:/code/my_python_server/micromambavenv/python.exe",
+      "args": [
+        "E:\\code\\my_python_server\\ocr\\ocr.py"
+      ],
+      "disabled": false,
+      "autoApprove": []
+    },
+    "likefavarite-tools": {
+      "command": "E:/code/my_python_server/micromambavenv/python.exe",
+      "args": [
+        "E:\\code\\my_python_server\\yolo\\detect_like_favorite.py"
+      ],
+      "disabled": false,
+      "autoApprove": []
+}}
 }
