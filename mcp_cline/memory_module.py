@@ -20,20 +20,51 @@ class GameMemory:
         self.load_memory()
     
     def load_memory(self):
-        """从文件加载历史记忆"""
+        """加载记忆数据"""
         try:
             if os.path.exists(self.memory_file):
                 with open(self.memory_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    if content.strip():  # 只有文件不为空时才解析
+                    content = f.read().strip()
+                    if content:
                         data = json.loads(content)
-                        self.memories = data.get('memories', [])
+                        
+                        # 检查数据格式是否正确
+                        if isinstance(data, list):
+                            # 旧格式，转换为新格式
+                            self.memories = data
+                            self.session_start_time = datetime.now().isoformat()
+                            self.total_entries = len(data)
+                        elif isinstance(data, dict):
+                            # 新格式
+                            self.memories = data.get("memories", [])
+                            self.session_start_time = data.get("session_start_time", datetime.now().isoformat())
+                            self.total_entries = data.get("total_entries", len(self.memories))
+                        else:
+                            # 不支持的格式，初始化为空
+                            self.memories = []
+                            self.session_start_time = datetime.now().isoformat()
+                            self.total_entries = 0
                     else:
+                        # 文件为空
                         self.memories = []
+                        self.session_start_time = datetime.now().isoformat()
+                        self.total_entries = 0
+            else:
+                # 文件不存在，初始化为空
+                self.memories = []
+                self.session_start_time = datetime.now().isoformat()
+                self.total_entries = 0
+                
+        except json.JSONDecodeError as e:
+            print(f"记忆文件 JSON 格式错误: {e}")
+            self.memories = []
+            self.session_start_time = datetime.now().isoformat()
+            self.total_entries = 0
         except Exception as e:
             print(f"加载记忆文件失败: {e}")
             self.memories = []
-    
+            self.session_start_time = datetime.now().isoformat()
+            self.total_entries = 0
     def save_memory(self):
         """保存记忆到文件"""
         try:

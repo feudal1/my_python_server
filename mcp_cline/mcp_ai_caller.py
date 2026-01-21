@@ -1,10 +1,3 @@
-"""
-MCP AI Caller - MCP协议AI调用器
-
-这是一个基于PyQt6的图形界面应用，用于与MCP服务器进行交互，并提供AI驱动的工具调用、
-记忆管理和战术分析功能。
-"""
-
 import sys
 import asyncio
 import os
@@ -301,6 +294,10 @@ class ToolLoader(QObject):
 class MCPAICaller(QMainWindow):
     """MCP AI调用器主窗口类"""
     
+    # 定义信号用于线程间通信
+    vlm_result_ready = pyqtSignal(str)
+    vlm_error_ready = pyqtSignal(str)
+    
     def __init__(self):
         """初始化MCP AI调用器"""
         super().__init__()
@@ -312,6 +309,7 @@ class MCPAICaller(QMainWindow):
         self._initialize_clients()
         self._setup_ui()
         self._setup_shortcuts()
+        self._setup_signal_connections()
 
     def _setup_initial_variables(self):
         """设置初始变量"""
@@ -325,26 +323,65 @@ class MCPAICaller(QMainWindow):
         self.tools_by_server = {}
         self.loading_dialog = None
         self.pending_show_tools = False
-        
+
         # 战术分析师模式相关
         self.tactical_analyzer_mode = False
         self.tactical_analyzer_timer = None
+        self.screenshot_timer = None
+        self.screenshot_buffer = []
         self.last_recorded_action = ""
+        self.last_analysis_result = ""  # 记录上一次的分析结果，用于去重
 
+        # 多轮对话历史
+        self.conversation_history = []
+        self.is_processing_message = False  # 防止消息并发处理
+        self.pending_messages = []  # 待处理消息队列
+
+        # VLM历史记录（用于发送给LLM吐槽）
+        self.vlm_history = []
+        self.vlm_commentary_timer = None
+
+        # VLM请求队列（确保按顺序执行）
+        self.vlm_request_queue = []
+        self.vlm_processing = False  # 标记是否正在处理VLM请求
+
+        # 吐槽控制：每3个VLM消息触发一次吐槽
+        self.vlm_commentary_threshold = 3  # 吐槽阈值
+        self.vlm_count_since_last_commentary = 0  # 距离上次吐槽的VLM数量
+    
     def _setup_memory_system(self):
         """设置记忆系统"""
         memory_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "game_memory.json")
         from memory_module import GameMemory, MemoryPromptInjector
         
+        # 删除旧的记忆文件以强制重新创建
+        if os.path.exists(memory_file):
+            os.remove(memory_file)
+        
+        # 创建默认格式的记忆文件
+        default_data = {
+            "memories": [],
+            "session_start_time": datetime.now().isoformat(),
+            "total_entries": 0
+        }
+        with open(memory_file, 'w', encoding='utf-8') as f:
+            json.dump(default_data, f, ensure_ascii=False, indent=2)
+        
         self.game_memory = GameMemory(memory_file)
         self.memory_injector = MemoryPromptInjector(self.game_memory)
-
+        self.game_memory.load_memory()
     def _setup_timers(self):
         """设置定时器"""
         # 设置定时器，每30秒自动记录游戏状态
         self.auto_record_timer = QTimer(self)
         self.auto_record_timer.timeout.connect(self.auto_record_game_state)
         self.auto_record_timer.start(30000)  # 30秒
+
+        # 设置定时器，每30秒将VLM历史发送给LLM吐槽（已改为基于VLM数量触发）
+        # 保留定时器作为备选，但主要逻辑改为每3个VLM消息触发一次
+        self.vlm_commentary_timer = QTimer(self)
+        self.vlm_commentary_timer.timeout.connect(self._send_vlm_history_to_llm)
+        self.vlm_commentary_timer.start(30000)  # 30秒（备用定时器）
 
     def _setup_window(self):
         """设置窗口属性"""
@@ -463,7 +500,7 @@ class MCPAICaller(QMainWindow):
                 color: #00ff41;
                 border: none;
                 font-family: Consolas, monospace;
-                font-size: 14px;
+                font-size: 18px;
                 font-weight: bold;
             }
         """)
@@ -503,6 +540,12 @@ class MCPAICaller(QMainWindow):
         left_shortcut.activated.connect(lambda: self.move_window(-10, 0))
         right_shortcut = QShortcut(QKeySequence('Alt+Right'), self)
         right_shortcut.activated.connect(lambda: self.move_window(10, 0))
+    
+    def _setup_signal_connections(self):
+        """设置信号连接"""
+        # 连接 VLM 结果信号
+        self.vlm_result_ready.connect(self._display_vlm_analysis)
+        self.vlm_error_ready.connect(self._handle_vlm_analysis_error)
 
     def move_window(self, dx: int, dy: int):
         """
@@ -523,24 +566,37 @@ class MCPAICaller(QMainWindow):
 
     def add_caption_line(self, text: str):
         """
-        添加一行字幕文本
+        添加一行字幕文本（线程安全）
         
         Args:
             text: 要添加的文本
         """
+        print(f"[UI DEBUG] 尝试添加文本: {text[:50]}...")  # 调试输出
+        
+        # 检查当前线程，确保在主线程中执行UI操作
+        if QThread.currentThread() != self.thread():
+            # 如果不在主线程，使用 QTimer 在主线程中执行
+            QTimer.singleShot(0, lambda: self._add_caption_line_impl(text))
+        else:
+            # 在主线程中直接执行
+            self._add_caption_line_impl(text)
+    
+    def _add_caption_line_impl(self, text: str):
+        """实际执行添加字幕文本的实现（必须在主线程中调用）"""
         if not isinstance(text, str):
             text = str(text)
         text = text.strip()
         if not text:
             return
-            
+
         current = self.caption_text.toPlainText()
         new = current + "\n" + text if current else text
         lines = new.split('\n')[-20:]
         self.caption_text.setPlainText('\n'.join(lines))
         self.caption_text.moveCursor(self.caption_text.textCursor().MoveOperation.End)
-        QTimer.singleShot(30000, self.clear_captions)
+        print(f"[UI DEBUG] 文本已添加，当前行数: {len(lines)}")  # 调试输出
 
+        # 不再自动清空，保留所有历史记录，向上滚动查看
     def send_message(self):
         """发送消息处理"""
         user_input = self.input_text.text().strip()
@@ -559,8 +615,15 @@ class MCPAICaller(QMainWindow):
             self.toggle_tactical_analyzer_mode()
         elif user_input.startswith('/r ') and len(user_input) > 3:
             self._handle_run_command(user_input[3:].strip())
+        elif user_input == '/clear_conv':
+            self.clear_conversation_history()
         else:
             self.process_message_with_function_call(user_input)
+
+    def clear_conversation_history(self):
+        """清除对话历史"""
+        self.conversation_history = []
+        self.add_caption_line("[系统] 对话历史已清除")
 
     def _handle_help_command(self):
         """处理帮助命令"""
@@ -738,14 +801,18 @@ class MCPAICaller(QMainWindow):
         Args:
             user_input: 用户输入的消息
         """
+        # 添加当前用户输入到对话历史
+        self.conversation_history.append({"role": "user", "content": user_input})
+        
         # 判断是否需要注入记忆
         if self.memory_injector.should_inject_memory(user_input):
             # 普通对话，注入记忆
             user_input_with_memory = self.memory_injector.inject_memory_to_prompt(user_input)
-            messages = [{"role": "user", "content": user_input_with_memory}]
+            messages = self.conversation_history[-10:]  # 只使用最近10条对话
+            messages[-1]["content"] = user_input_with_memory  # 更新最新消息内容
         else:
             # 工具调用，不注入记忆
-            messages = [{"role": "user", "content": user_input}]
+            messages = self.conversation_history[-10:]  # 只使用最近10条对话
         
         tools_schema = self.get_mcp_tools_schema() if self.tools_by_server else None
 
@@ -758,6 +825,8 @@ class MCPAICaller(QMainWindow):
                 content = ContentExtractor.extract_content_from_response(result)
                 if content:
                     self.add_caption_line(content)
+                    # 将AI回复添加到对话历史
+                    self.conversation_history.append({"role": "assistant", "content": content})
                     # 如果是普通对话，尝试解析AI回复并记录到记忆
                     if not user_input.startswith('/r'):
                         self.record_ai_response_to_memory(user_input, content)
@@ -808,10 +877,10 @@ class MCPAICaller(QMainWindow):
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
-        thread.join(timeout=15)  # 给 Blender 等慢启动工具留足时间
+        thread.join(timeout=5)  # 减少超时时间
 
         if thread.is_alive():
-            return {"error": "MCP 调用超时（15秒）"}
+            return {"error": "MCP 调用超时（5秒）"}
 
         if not exception_queue.empty():
             exc = exception_queue.get()
@@ -890,6 +959,45 @@ class MCPAICaller(QMainWindow):
             )
             print(f"[自动记录] 时间: {datetime.now().strftime('%H:%M:%S')}")
 
+    def _send_vlm_history_to_llm(self):
+        """将VLM历史记录发送给LLM进行妹妹式吐槽"""
+        if not self.vlm_history:
+            return
+
+        # 构建历史记录摘要
+        history_summary = "\n".join([f"[{item['time']}] {item['action']}" for item in self.vlm_history])
+
+        # 发送给LLM进行妹妹式吐槽
+        commentary_prompt = f"""我哥哥在玩游戏，这是我看到的他最近的游戏操作：
+
+{history_summary}
+
+你是傲娇妹妹，用傲娇的语气吐槽一下，要求：
+1. 典型的傲娇性格：表面嫌弃、嘴硬心软、爱逞强
+2. 经典傲娇口癖："哼"、"才不是"、"笨蛋"、"笨-蛋"、"啰嗦"、"谁、谁在乎啊"、"才没有"
+3. 明明关心却装作不在意：用"我不过是随便看看"、"才不是为了你"等
+4. 看到好操作要傲娇地夸奖："勉勉强强还可以啦"、"一般般吧"、"也就那样"
+5. 看到差操作要毒舌吐槽："笨蛋哥哥"、"真拿你没办法"、"啧，真是的"
+6. 40-70字之间
+7. 语气要像傲娇妹妹一边嫌弃一边偷偷关注哥哥玩游戏
+
+好操作例子："哼，这波还勉强凑合吧，笨蛋哥哥总算有点长进了~"
+差操作例子："笨蛋哥哥！都说了别送人头，真拿你没办法，啧~"
+一般操作："才、才不是在看你玩呢，只是顺便看到而已啦！"
+"""
+
+        try:
+            commentary = self.llm_service.create([{"role": "user", "content": commentary_prompt}])
+            commentary_text = ContentExtractor.extract_content_from_response(commentary)
+
+            if commentary_text:
+                self.add_caption_line(f"[吐槽] {commentary_text}")
+        except Exception as e:
+            print(f"获取LLM吐槽失败: {e}")
+
+        # 清空历史记录
+        self.vlm_history.clear()
+
     def show_memory_summary(self):
         """显示记忆摘要"""
         summary = self.game_memory.analyze_memories()
@@ -905,25 +1013,75 @@ class MCPAICaller(QMainWindow):
         self.tactical_analyzer_mode = not self.tactical_analyzer_mode
 
         if self.tactical_analyzer_mode:
-            # 初始化战术分析计时器
+            # 清空截图缓冲区
+            self.screenshot_buffer = []
+            
+            # 初始化截图计时器 - 每2秒截一张图
+            if self.screenshot_timer is None:
+                self.screenshot_timer = QTimer(self)
+                self.screenshot_timer.timeout.connect(self.capture_screenshot)
+            
+            # 初始化战术分析计时器 - 每10秒分析一次
             if self.tactical_analyzer_timer is None:
                 self.tactical_analyzer_timer = QTimer(self)
                 self.tactical_analyzer_timer.timeout.connect(self.auto_tactical_analysis)
             
-            self.tactical_analyzer_timer.start(30000)  # 30秒
-            self.add_caption_line("[战术分析师] 模式已启动 - 每30秒自动分析")
-            self.add_caption_line("[战术分析师] 开始首次分析...")
-            self.caption_text.update()  # 强制刷新显示
-            QApplication.processEvents()  # 处理事件队列
-            # 立即执行一次分析
-            self.auto_tactical_analysis()
+            self.screenshot_timer.start(2000)  # 2秒
+            self.tactical_analyzer_timer.start(10000)  # 10秒
+            
+            self.add_caption_line("[战术分析师] 模式已启动")
+            self.add_caption_line("[战术分析师] 每2秒截图，每10秒分析5张图")
+            self.caption_text.update()
+            QApplication.processEvents()
         else:
+            if self.screenshot_timer:
+                self.screenshot_timer.stop()
             if self.tactical_analyzer_timer:
                 self.tactical_analyzer_timer.stop()
+            self.screenshot_buffer = []
             self.add_caption_line("[战术分析师] 模式已停止")
-            self.caption_text.update()  # 强制刷新显示
-            QApplication.processEvents()  # 处理事件队列
+            self.caption_text.update()
+            QApplication.processEvents()
     
+    def capture_screenshot(self):
+        """每2秒捕获一张截图"""
+        screenshot_path = self.take_immediate_screenshot()
+        if screenshot_path and os.path.exists(screenshot_path):
+            validated_path = self.validate_and_prepare_image(screenshot_path)
+            if validated_path:
+                self.screenshot_buffer.append(validated_path)
+                # 保持最多5张截图
+                if len(self.screenshot_buffer) > 5:
+                    self.screenshot_buffer.pop(0)
+                print(f"[截图] 已捕获 {len(self.screenshot_buffer)}/5 张截图")
+    
+    def take_immediate_screenshot(self) -> Optional[str]:
+        """
+        立即截取屏幕截图，支持区域选择和缩放
+        """
+        try:
+            from PIL import ImageGrab
+            import time
+            
+            # 截取整个屏幕
+            screenshot = ImageGrab.grab()
+            
+            # 生成唯一文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"screenshot_{timestamp}.png"
+            
+            # 保存截图到项目目录下的screenshots文件夹
+            screenshots_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'screenshots')
+            os.makedirs(screenshots_dir, exist_ok=True)
+            
+            filepath = os.path.join(screenshots_dir, filename)
+            screenshot.save(filepath, "PNG")
+            
+            print(f"截图已保存到: {filepath}")
+            return filepath
+        except Exception as e:
+            print(f"截图失败: {e}")
+            return None
     def get_latest_screenshot(self) -> Optional[str]:
         """
         获取最新的游戏截图
@@ -963,70 +1121,244 @@ class MCPAICaller(QMainWindow):
 
         return latest_file
 
+    def validate_and_prepare_image(self, image_path: str) -> Optional[str]:
+        """
+        验证并准备图像用于VLM处理，支持图像缩放
+        """
+        try:
+            from PIL import Image
+            
+            # 打开并验证图像
+            with Image.open(image_path) as img:
+                # 检查图像大小，如果过大则缩放到最大 800x800
+                max_size = (800, 800)
+                if img.width > max_size[0] or img.height > max_size[1]:
+                    print(f"图像尺寸 ({img.width}x{img.height}) 超过最大尺寸 {max_size}，开始缩放...")
+                    
+                    # 计算缩放比例
+                    ratio = min(max_size[0]/img.width, max_size[1]/img.height)
+                    new_width = int(img.width * ratio)
+                    new_height = int(img.height * ratio)
+                    
+                    print(f"缩放到: {new_width}x{new_height}")
+                    
+                    # 缩放图像并保存到临时位置
+                    img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    
+                    # 生成缩放后的临时文件
+                    import tempfile
+                    import os
+                    temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    
+                    # 使用原文件名添加_resized后缀
+                    base_name = os.path.splitext(os.path.basename(image_path))[0]
+                    ext = os.path.splitext(os.path.basename(image_path))[1]
+                    temp_path = os.path.join(temp_dir, f"{base_name}_resized{ext}")
+                    
+                    img_resized.save(temp_path, quality=85)
+                    print(f"缩放图像已保存到: {temp_path}")
+                    return temp_path
+                else:
+                    # 图像尺寸合适，直接返回原路径
+                    print(f"图像尺寸 ({img.width}x{img.height}) 无需缩放")
+                    return image_path
+        except Exception as e:
+            print(f"图像验证失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     def auto_tactical_analysis(self):
-        """自动战术分析（每30秒调用一次）"""
+        """自动战术分析（每10秒调用一次）- 使用5张截图一起分析"""
         if not self.tactical_analyzer_mode:
             return
 
-        self.add_caption_line(f"[AI指挥] {datetime.now().strftime('%H:%M:%S')} 正在分析...")
+        # 检查是否有足够的截图
+        if len(self.screenshot_buffer) < 5:
+            print(f"[分析] 截图数量不足 {len(self.screenshot_buffer)}/5，等待下一次...")
+            return
 
-        # 获取历史记录
-        recent_memories = self.game_memory.get_recent_memories(10)
-        context_lines = ["历史记录:"]
-        for i, memory in enumerate(recent_memories, 1):
-            context_lines.append(f"{i}. {memory['action']}")
-            if memory['context']:
-                context_lines.append(f"   情况: {memory['context']}")
-            if memory['analysis']:
-                context_lines.append(f"   分析: {memory['analysis']}")
-            context_lines.append("")
+        # 获取缓冲区中的5张截图
+        screenshots_to_analyze = self.screenshot_buffer.copy()
+        self.screenshot_buffer = []  # 清空缓冲区
 
-        # 获取截图
-        screenshot_path = self.get_latest_screenshot()
-        visual_analysis = ""
-        if screenshot_path and os.path.exists(screenshot_path):
+        # 将请求加入队列
+        vlm_request = {
+            'type': 'tactical_analysis',
+            'screenshots': screenshots_to_analyze
+        }
+        self.vlm_request_queue.append(vlm_request)
+        print(f"[队列] VLM请求已加入队列，当前队列长度: {len(self.vlm_request_queue)}")
+
+        # 尝试处理队列
+        self._process_vlm_queue()
+
+    def _process_vlm_queue(self):
+        """处理VLM请求队列（确保按顺序执行）"""
+        # 如果正在处理或队列为空，直接返回
+        if self.vlm_processing or not self.vlm_request_queue:
+            return
+
+        self.vlm_processing = True
+        print(f"[队列] 开始处理VLM请求，剩余: {len(self.vlm_request_queue)}")
+
+        # 取出第一个请求
+        request = self.vlm_request_queue.pop(0)
+
+        # 构建提示词
+        full_prompt = """这5张是连续2秒间隔的游戏截图，请综合分析游戏角色在这10秒内的行为变化和动作序列。
+
+重点关注：
+1. 击杀瞬间：角色击杀敌人的画面（血条消失、敌人倒下等）
+2. 死亡瞬间：角色被击杀的画面（屏幕变灰、倒地、阵亡提示等）
+3. 战斗状态：交火、受伤、瞄准、逃跑等
+
+要求：
+- 如果出现击杀或死亡，明确标注"击杀"或"死亡"
+- 用50字以内描述
+- 只描述动作和场景，不要剧情描写
+
+例如："角色开枪击杀一名敌人，继续前进" 或 "角色被击杀，屏幕变灰"""
+
+        # 在后台线程中执行VLM调用
+        def vlm_analysis_task():
             try:
-                vlm_result = self.vlm_service.create_with_image(
-                    [{"role": "user", "content": "一句话描述当前角色意图"}],
-                    image_source=screenshot_path
+                vlm_messages = [
+                    {"role": "user", "content": full_prompt}
+                ]
+
+                # 使用5张截图一起分析
+                vlm_result = self.vlm_service.create_with_multiple_images(
+                    vlm_messages,
+                    image_sources=request['screenshots']
                 )
-                visual_analysis = ContentExtractor.extract_content_from_response(vlm_result)
-                self.add_caption_line(f"[画面] {visual_analysis}")
-            except Exception as e:
-                print(f"VLM失败: {e}")
 
-        # 构建分析提示
-        analysis_prompt = f"""{chr(10).join(context_lines)}
+                analysis_result = ContentExtractor.extract_content_from_response(vlm_result)
 
-画面意图: {visual_analysis if visual_analysis else "无"}
+                # 将分析结果添加到历史记录（带时间戳）
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                self.vlm_history.append({
+                    "time": timestamp,
+                    "action": analysis_result
+                })
 
-你是作战辅助师，用三句话回复：
-1. 一句话描述当前角色意图
-2. 一句话指导下一步操作
-3. 一句话解释为什么要走这一步"""
+                # 检查是否是重复内容
+                if self._is_duplicate_analysis(analysis_result):
+                    print("[队列] 重复内容，跳过")
+                else:
+                    # 直接调用处理函数（PyQt6 支持从任何线程调用UI方法）
+                    self._handle_vlm_analysis_result(analysis_result)
 
+                # 检查是否达到吐槽阈值
+                self.vlm_count_since_last_commentary += 1
+                if self.vlm_count_since_last_commentary >= self.vlm_commentary_threshold:
+                    print(f"[吐槽] 已收集{self.vlm_count_since_last_commentary}个VLM分析，触发吐槽")
+                    self._send_vlm_history_to_llm()
+                    self.vlm_count_since_last_commentary = 0
+
+            except AttributeError:
+                # 如果VLM服务不支持多图分析，fallback到单图分析
+                print("[分析] VLM不支持多图分析，使用单图模式")
+                self._fallback_single_image_analysis(request['screenshots'][-1])
+            except Exception as vlm_error:
+                error_msg = f"VLM分析失败: {vlm_error}"
+                print(error_msg)
+                import traceback
+                traceback.print_exc()
+                # 使用信号发送错误到主线程
+                self.vlm_error_ready.emit(f"[画面] VLM分析失败: {str(vlm_error)}")
+            finally:
+                # 请求完成，标记为未处理状态，并处理下一个请求
+                self.vlm_processing = False
+                print(f"[队列] 当前请求完成，继续处理下一个...")
+                self._process_vlm_queue()
+
+        # 在后台线程中执行VLM调用
+        analysis_thread = threading.Thread(target=vlm_analysis_task, daemon=True)
+        analysis_thread.start()
+
+    def _fallback_single_image_analysis(self, image_path: str):
+        """fallback到单图分析"""
         try:
-            # 异步执行分析，避免阻塞UI
-            result = self.llm_service.create([{"role": "user", "content": analysis_prompt}])
-            content = ContentExtractor.extract_content_from_response(result)
+            full_prompt = """用20字以内简短描述游戏角色此刻正在做什么。
 
-            if content:
-                self.add_caption_line(f"--- 作战辅助 ---")
-                self.add_caption_line(content)
+重点关注：
+1. 击杀瞬间：标注"击杀"
+3. 战斗状态：交火、受伤,快速进攻,缓慢推进，占领等
 
-                # 记录到记忆
-                self.game_memory.add_memory(
-                    action=content,
-                    context=f"自动战术分析 - {datetime.now().strftime('%H:%M:%S')}",
-                    analysis=""
-                )
-            else:
-                self.add_caption_line("[AI] 未能获取分析结果")
-                
+只描述动作和场景，不要剧情描写。"""
+            
+            vlm_messages = [{"role": "user", "content": full_prompt}]
+            vlm_result = self.vlm_service.create_with_image(
+                vlm_messages,
+                image_source=image_path
+            )
+            
+            analysis_result = ContentExtractor.extract_content_from_response(vlm_result)
+            
+            # 检查是否是重复内容
+            if not self._is_duplicate_analysis(analysis_result):
+                self._handle_vlm_analysis_result(analysis_result)
         except Exception as e:
-            error_msg = f"战术分析出错: {str(e)}"
-            self.add_caption_line(error_msg)
-            print(error_msg)
+            print(f"fallback单图分析失败: {e}")
+            self.vlm_error_ready.emit(f"[画面] 单图分析失败: {str(e)}")
+
+    def _handle_vlm_analysis_result(self, analysis_result: str):
+        """处理VLM分析结果（线程安全）"""
+        # 使用信号发送到主线程
+        self.vlm_result_ready.emit(analysis_result)
+    
+    def _display_vlm_analysis(self, analysis_result: str):
+        """在主线程中显示VLM分析结果"""
+        if analysis_result and analysis_result.strip():
+            # 清理输出
+            cleaned_result = analysis_result.strip()
+
+            # 更新最后一次分析结果
+            self.last_analysis_result = cleaned_result
+
+            # 直接显示结果
+            self.add_caption_line(cleaned_result)
+
+            # 强制刷新UI
+            self.caption_text.update()
+            QApplication.processEvents()
+
+            # 记录到记忆
+            self.game_memory.add_memory(
+                action=cleaned_result,
+                context=f"自动分析 - {datetime.now().strftime('%H:%M:%S')}",
+                analysis=""
+            )
+    
+    def _is_duplicate_analysis(self, new_analysis: str) -> bool:
+        """检查分析结果是否重复"""
+        if not self.last_analysis_result or not new_analysis:
+            return False
+        
+        # 简单的相似度检查：如果长度差异超过50%则认为不重复
+        len_diff = abs(len(new_analysis) - len(self.last_analysis_result))
+        max_len = max(len(new_analysis), len(self.last_analysis_result))
+        if len_diff / max_len > 0.5:
+            return False
+        
+        # 检查是否完全相同
+        if new_analysis == self.last_analysis_result:
+            return True
+        
+        # 检查相似度（简单的前100个字符匹配）
+        min_len = min(len(new_analysis), len(self.last_analysis_result))
+        if min_len > 50:
+            match_chars = sum(1 for a, b in zip(new_analysis[:100], self.last_analysis_result[:100]) if a == b)
+            if match_chars / 100 > 0.9:  # 90%以上相似则认为是重复
+                return True
+        
+        return False
+
+    def _handle_vlm_analysis_error(self, error_message: str):
+        """在主线程中处理VLM分析错误"""
+        print(f"[UI DEBUG] _handle_vlm_analysis_error 被调用: {error_message}")
+        self.add_caption_line(error_message)
 
 
 def main():
@@ -1035,9 +1367,9 @@ def main():
     app.setStyle('Fusion')
     app.setStyleSheet("QMainWindow { background-color: transparent; }")
     window = MCPAICaller()
+    # 修改窗口大小，使其更大
+    window.setGeometry(200, 200, 500, 300)  # 增加宽度和高度
     window.show()
     sys.exit(app.exec())
-
-
 if __name__ == "__main__":
     main()
