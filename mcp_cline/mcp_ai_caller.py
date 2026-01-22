@@ -8,13 +8,108 @@ import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 
+# 添加当前目录到路径,支持直接运行
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QTextEdit, QLineEdit, QVBoxLayout, 
-    QWidget, QLabel, QDialog, QScrollArea, QMessageBox
+    QApplication, QMainWindow, QTextEdit, QLineEdit, QVBoxLayout,
+    QWidget, QLabel, QDialog, QScrollArea, QMessageBox, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QThread
 from PyQt6.QtGui import QKeySequence, QShortcut
 import importlib.util
+
+# 导入记忆窗口 (使用绝对导入)
+try:
+    from memory_window import MemoryWindow
+except ImportError:
+    MemoryWindow = None
+
+
+class MonitoringWindow(QMainWindow):
+    """监控显示窗口 - 用于显示VLM分析或吐槽内容"""
+
+    def __init__(self, title: str, window_type: str):
+        """
+        初始化监控窗口
+
+        Args:
+            title: 窗口标题
+            window_type: 窗口类型 ('analysis' 或 'commentary')
+        """
+        super().__init__()
+        self.window_type = window_type
+        self._setup_window(title)
+        self._setup_ui()
+
+    def _setup_window(self, title: str):
+        """设置窗口属性"""
+        self.setWindowTitle(title)
+
+        # 吐槽窗口使用无边框透明窗口
+        if self.window_type == 'commentary':
+            self.setWindowFlags(
+                Qt.WindowType.FramelessWindowHint |
+                Qt.WindowType.WindowStaysOnTopHint
+            )
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        else:
+            self.setWindowFlags(
+                Qt.WindowType.Window |
+                Qt.WindowType.WindowStaysOnTopHint
+            )
+
+        # 设置窗口位置和大小
+        if self.window_type == 'commentary':
+            # 吐槽窗口在上层，位置更靠上，与主窗口x坐标对齐
+            self.setGeometry(200, 50, 500, 200)
+
+    def _setup_ui(self):
+        """设置UI"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
+        self.text_display = QTextEdit()
+        self.text_display.setReadOnly(True)
+
+        # 根据窗口类型设置样式
+        if self.window_type == 'analysis':
+            color = '#00aaff'  # VLM分析窗口用蓝色
+            bg_alpha = 220
+        else:
+            color = '#ffaa00'  # 吐槽窗口用橙色
+            bg_alpha = 100  # 吐槽窗口更透明
+
+        self.text_display.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: rgba(30, 30, 30, {bg_alpha});
+                color: {color};
+                border: 2px solid {color};
+                border-radius: 5px;
+                font-family: Consolas, monospace;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 10px;
+            }}
+        """)
+
+        layout.addWidget(self.text_display)
+
+    def add_text(self, text: str):
+        """添加文本到窗口"""
+        self.text_display.append(text)
+        # 自动滚动到底部
+        scrollbar = self.text_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def clear_text(self):
+        """清空窗口内容"""
+        self.text_display.clear()
 
 
 class ContentExtractor:
@@ -293,30 +388,66 @@ class ToolLoader(QObject):
 
 class MCPAICaller(QMainWindow):
     """MCP AI调用器主窗口类"""
-    
+
     # 定义信号用于线程间通信
     vlm_result_ready = pyqtSignal(str)
     vlm_error_ready = pyqtSignal(str)
-    
+    add_caption_signal = pyqtSignal(str)  # 添加字幕信号
+
     def __init__(self):
         """初始化MCP AI调用器"""
         super().__init__()
-        self._setup_initial_variables()
-        self._setup_memory_system()
-        self._setup_timers()
-        self._setup_window()
-        self._initialize_services()
-        self._initialize_clients()
-        self._setup_knowledge_base()  # 新增知识库功能
-        self._setup_ui()
-        self._setup_shortcuts()
-        self._setup_signal_connections()
-        
-        # 默认启动工作分析模式
-        self.work_analysis_mode = True
-        self.tool_activation_pending = False
-        self.tool_activation_start_time = None
-        self.async_refresh_tools_list()  # 默认寻找MCP工具
+        try:
+            print("[初始化] 设置初始变量...")
+            self._setup_initial_variables()
+            
+            print("[初始化] 设置记忆系统...")
+            self._setup_memory_system()
+            
+            print("[初始化] 设置定时器...")
+            self._setup_timers()
+            
+            print("[初始化] 设置窗口...")
+            self._setup_window()
+            
+            print("[初始化] 初始化服务...")
+            self._initialize_services()
+            
+            print("[初始化] 初始化客户端...")
+            self._initialize_clients()
+            
+            print("[初始化] 设置知识库...")
+            self._setup_knowledge_base()  # 新增知识库功能
+
+            print("[初始化] 设置监控窗口...")
+            self._setup_monitoring_windows()  # 新增监控窗口
+
+            print("[初始化] 设置UI...")
+            self._setup_ui()
+
+            print("[初始化] 设置快捷键...")
+            self._setup_shortcuts()
+
+            print("[初始化] 设置信号连接...")
+            self._setup_signal_connections()
+
+            print("[初始化] 初始化自我监控...")
+            self._initialize_self_monitoring()
+
+            # 默认启动工作分析模式
+            self.work_analysis_mode = True
+            self.tool_activation_pending = False
+            self.tool_activation_start_time = None
+            
+            print("[初始化] 异步加载MCP工具...")
+            self.async_refresh_tools_list()  # 默认寻找MCP工具
+            
+            print("[初始化] 完成!")
+        except Exception as e:
+            import traceback
+            print(f"[错误] 初始化失败: {e}")
+            traceback.print_exc()
+            raise
 
     def _setup_initial_variables(self):
         """设置初始变量"""
@@ -362,6 +493,9 @@ class MCPAICaller(QMainWindow):
 
         # 知识库
         self.knowledge_base = []
+
+        # 自我监控线程
+        self.self_monitoring_thread = None
 
     def _setup_memory_system(self):
         """设置记忆系统"""
@@ -436,6 +570,20 @@ class MCPAICaller(QMainWindow):
         self.min_height = 120
         self.max_height = 500
 
+    def _setup_monitoring_windows(self):
+        """设置监控显示窗口（吐槽窗口和记忆窗口）"""
+        # 创建吐槽窗口
+        self.commentary_window = MonitoringWindow("吐槽窗口", "commentary")
+        self.commentary_window.hide()
+
+        # 创建记忆窗口 (如果可用)
+        if MemoryWindow is not None:
+            self.memory_window = MemoryWindow()
+            self.memory_window.hide()
+        else:
+            self.memory_window = None
+            print("[警告] 记忆窗口不可用")
+
     def _initialize_services(self):
         """初始化LLM和VLM服务"""
         llm_spec = importlib.util.spec_from_file_location(
@@ -463,15 +611,88 @@ class MCPAICaller(QMainWindow):
         self.tool_loader = ToolLoader(self.mcp_client)
         self.tool_loader.tools_loaded.connect(self.on_tools_loaded)
         self.tool_loader.loading_failed.connect(self.on_tools_loading_failed)
-        
+
         # 启动时自动加载工具
         self.tools_loaded_once = False
         self.async_refresh_tools_list()  # 默认寻找MCP工具
 
+    def _initialize_self_monitoring(self):
+        """初始化自我监控线程"""
+        from self_monitoring import SelfMonitoringThread
+
+        # 创建自我监控线程（verbose=False，减少控制台输出）
+        self.self_monitoring_thread = SelfMonitoringThread(
+            vlm_service=self.vlm_service,
+            llm_service=self.llm_service,
+            callback_analysis=self._on_self_monitoring_analysis,
+            callback_commentary=self._on_self_monitoring_commentary,
+            verbose=False,  # 不输出详细日志到控制台
+            enable_memory=True,  # 启用向量记忆系统
+            callback_memory_retrieved=self._on_memory_retrieved,  # 记忆检索回调
+            callback_memory_saved=self._on_memory_saved  # 记忆保存回调
+        )
+        print("[自我监控] 线程已创建（未启动，已启用向量记忆系统）")
+
+    def _on_self_monitoring_analysis(self, analysis: str):
+        """
+        自我监控VLM分析结果回调 - 显示在主窗口字幕区
+
+        Args:
+            analysis: VLM分析结果
+        """
+        # 添加到主窗口字幕区
+        self.add_caption_line(f"[分析] {analysis}")
+
+    def _on_self_monitoring_commentary(self, commentary: str):
+        """
+        自我监控吐槽结果回调 - 显示在吐槽窗口
+
+        Args:
+            commentary: 吐槽文本
+        """
+        # 添加到吐槽窗口
+        try:
+            # 显示窗口（如果还没显示）
+            self.commentary_window.show()
+            # 添加文本
+            self.commentary_window.add_text(f"{commentary}")
+            print(f"[回调] 吐槽已添加到吐槽窗口: {commentary[:30]}...")
+        except Exception as e:
+            print(f"[错误] 添加吐槽到窗口失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _on_memory_retrieved(self, query_text: str, results: List):
+        """
+        记忆检索回调 - 显示在记忆窗口
+
+        Args:
+            query_text: 查询文本
+            results: 检索结果
+        """
+        if hasattr(self, 'memory_window') and self.memory_window:
+            self.memory_window.log_retrieval(query_text, results)
+
+    def _on_memory_saved(self, memory_id: str, vlm_analysis: str, llm_commentary: str):
+        """
+        记忆保存回调 - 显示在记忆窗口
+
+        Args:
+            memory_id: 记忆ID
+            vlm_analysis: VLM分析结果
+            llm_commentary: LLM吐槽
+        """
+        if hasattr(self, 'memory_window') and self.memory_window:
+            self.memory_window.log_save(memory_id, vlm_analysis, llm_commentary)
+            # 更新统计信息
+            if hasattr(self, 'self_monitoring_thread') and self.self_monitoring_thread.vector_memory:
+                stats = self.self_monitoring_thread.vector_memory.get_stats()
+                self.memory_window.update_stats(stats.get('total_memories', 0))
+
     def on_tools_loaded(self, data_tuple: Tuple[Dict, Dict]):
         """
         工具加载完成回调
-        
+
         Args:
             data_tuple: 包含所有工具映射和按服务器分组的工具的元组
         """
@@ -479,13 +700,17 @@ class MCPAICaller(QMainWindow):
         self.all_tools_mapping = all_tools_mapping
         self.tools_by_server = tools_by_server
         self.is_loading_tools = False
-        
+
         if self.loading_dialog:
             self.loading_dialog.accept()
             self.loading_dialog = None
         if self.pending_show_tools:
             self.pending_show_tools = False
             self._show_tools_dialog_now()
+
+        # 自动启动自我监控
+        self.add_caption_line("[系统] MCP工具加载完成")
+        QTimer.singleShot(1000, self.start_self_monitoring)  # 延迟1秒启动
 
     def on_tools_loading_failed(self, error_msg: str):
         """
@@ -589,6 +814,8 @@ class MCPAICaller(QMainWindow):
         # 连接 VLM 结果信号
         self.vlm_result_ready.connect(self._display_vlm_analysis)
         self.vlm_error_ready.connect(self._handle_vlm_analysis_error)
+        # 连接添加字幕信号
+        self.add_caption_signal.connect(self._add_caption_line_via_signal)
 
     def move_window(self, dx: int, dy: int):
         """
@@ -610,19 +837,27 @@ class MCPAICaller(QMainWindow):
     def add_caption_line(self, text: str):
         """
         添加一行字幕文本（线程安全）
-        
+
         Args:
             text: 要添加的文本
         """
         print(f"[UI DEBUG] 尝试添加文本: {text[:50]}...")  # 调试输出
-        
+        print(f"[UI DEBUG] 当前线程: {QThread.currentThread()}, 主线程: {self.thread()}")  # 线程检查
+
         # 检查当前线程，确保在主线程中执行UI操作
         if QThread.currentThread() != self.thread():
-            # 如果不在主线程，使用 QTimer 在主线程中执行
-            QTimer.singleShot(0, lambda: self._add_caption_line_impl(text))
+            print("[UI DEBUG] 不在主线程，使用信号转发")
+            # 如果不在主线程，使用信号转发
+            self.add_caption_signal.emit(text)
         else:
+            print("[UI DEBUG] 在主线程，直接添加")
             # 在主线程中直接执行
             self._add_caption_line_impl(text)
+
+    def _add_caption_line_via_signal(self, text: str):
+        """通过信号添加文本（在主线程中执行）"""
+        print(f"[UI DEBUG] 信号触发，添加文本: {text[:30]}...")
+        self._add_caption_line_impl(text)
     
     def _add_caption_line_impl(self, text: str):
         """实际执行添加字幕文本的实现（必须在主线程中调用）"""
@@ -664,6 +899,14 @@ class MCPAICaller(QMainWindow):
         elif user_input.startswith('/work '):  # 工作相关命令
             work_command = user_input[6:].strip()
             self.process_work_command(work_command)
+        elif user_input == '/sm_start':  # 启动自我监控
+            self.start_self_monitoring()
+        elif user_input == '/sm_stop':  # 停止自我监控
+            self.stop_self_monitoring()
+        elif user_input == '/sm_pause':  # 暂停自我监控
+            self.pause_self_monitoring()
+        elif user_input == '/sm_resume':  # 恢复自我监控
+            self.resume_self_monitoring()
         else:
             # 默认处理用户输入，包括工作分析
             self.process_message_with_function_call(user_input)
@@ -727,7 +970,7 @@ class MCPAICaller(QMainWindow):
         """处理工作相关命令"""
         # 将工作命令加入对话历史
         self.conversation_history.append({"role": "user", "content": f"工作命令: {command}"})
-        
+
         # 加入知识库信息
         knowledge_context = "\n".join(self.knowledge_base)
         enhanced_command = f"""工作知识库:
@@ -736,24 +979,64 @@ class MCPAICaller(QMainWindow):
 当前工作命令: {command}
 
 请分析这个工作命令并提供建议或执行方案。"""
-        
+
         messages = [{"role": "user", "content": enhanced_command}]
-        
+
         try:
             result = self.llm_service.create(messages, tools=self.get_mcp_tools_schema() if self.tools_by_server else None)
             response = ContentExtractor.extract_content_from_response(result)
-            
+
             if response:
                 self.add_caption_line(response)
                 # 将AI回复添加到对话历史
                 self.conversation_history.append({"role": "assistant", "content": response})
-                
+
                 # 检查是否需要激活工具
                 if self.should_activate_tools_for_response(response):
                     self.request_tool_activation()
-                    
+
         except Exception as e:
             self.add_caption_line(f"处理工作命令时出错: {str(e)}")
+
+    def start_self_monitoring(self):
+        """启动自我监控"""
+        if self.self_monitoring_thread:
+            if not self.self_monitoring_thread.running:
+                self.self_monitoring_thread.start_monitoring()
+                # 显示吐槽窗口
+                self.commentary_window.show()
+                # 显示记忆窗口 (如果可用)
+                if self.memory_window:
+                    self.memory_window.show()
+                self.add_caption_line("[系统] 自我监控已启动：每10秒截5张图，VLM分析后立即生成吐槽")
+            else:
+                self.add_caption_line("[系统] 自我监控已在运行中")
+        else:
+            self.add_caption_line("[错误] 自我监控线程未初始化")
+
+    def stop_self_monitoring(self):
+        """停止自我监控"""
+        if self.self_monitoring_thread:
+            self.self_monitoring_thread.stop_monitoring()
+            self.add_caption_line("[系统] 自我监控已停止")
+        else:
+            self.add_caption_line("[错误] 自我监控线程未初始化")
+
+    def pause_self_monitoring(self):
+        """暂停自我监控"""
+        if self.self_monitoring_thread:
+            self.self_monitoring_thread.pause_monitoring()
+            self.add_caption_line("[系统] 自我监控已暂停")
+        else:
+            self.add_caption_line("[错误] 自我监控线程未初始化")
+
+    def resume_self_monitoring(self):
+        """恢复自我监控"""
+        if self.self_monitoring_thread:
+            self.self_monitoring_thread.resume_monitoring()
+            self.add_caption_line("[系统] 自我监控已恢复")
+        else:
+            self.add_caption_line("[错误] 自我监控线程未初始化")
 
     def should_activate_tools_for_response(self, response: str) -> bool:
         """判断响应是否需要激活工具"""
@@ -779,6 +1062,23 @@ class MCPAICaller(QMainWindow):
             self.add_caption_line("[系统] 首次加载MCP工具列表...")
             self.async_refresh_tools_list()
         self.show_tools_dialog()
+
+        # 显示帮助信息
+        help_text = """
+【可用命令】
+/h - 显示MCP工具列表
+/m - 显示记忆摘要
+/mc - 清空当前会话记忆
+/t - 确认工具激活
+/r <命令> - 运行工具命令
+/work <命令> - 处理工作相关命令
+/clear_conv - 清除对话历史
+/sm_start - 启动自我监控（每10秒截5张图）
+/sm_stop - 停止自我监控
+/sm_pause - 暂停自我监控
+/sm_resume - 恢复自我监控
+"""
+        self.add_caption_line(help_text)
 
     def _handle_run_command(self, command: str):
         """处理运行命令 - 通过LLM调用function call
@@ -1075,10 +1375,17 @@ class MCPAICaller(QMainWindow):
         
         # 停止自动记录定时器
         self.auto_record_timer.stop()
-        
+
+        # 停止自我监控线程
+        if self.self_monitoring_thread:
+            self.self_monitoring_thread.stop_monitoring()
+            # 等待线程结束
+            if self.self_monitoring_thread.is_alive():
+                self.self_monitoring_thread.join(timeout=2)
+
         # 保存记忆
         self.game_memory.save_memory()
-        
+
         event.accept()
 
     def record_ai_response_to_memory(self, user_input: str, ai_response: str):
@@ -1559,14 +1866,25 @@ class MCPAICaller(QMainWindow):
 
 def main():
     """主函数"""
-    app = QApplication(sys.argv)
-    app.setStyle('Fusion')
-    app.setStyleSheet("QMainWindow { background-color: transparent; }")
-    window = MCPAICaller()
-    # 修改窗口大小，使其更大
-    window.setGeometry(200, 200, 500, 300)  # 增加宽度和高度
-    window.show()
-    sys.exit(app.exec())
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle('Fusion')
+        app.setStyleSheet("QMainWindow { background-color: transparent; }")
+        
+        print("[启动] 创建主窗口...")
+        window = MCPAICaller()
+        
+        # 修改窗口大小，使其更大
+        window.setGeometry(200, 200, 500, 300)  # 增加宽度和高度
+        window.show()
+        
+        print("[启动] 进入消息循环...")
+        sys.exit(app.exec())
+    except Exception as e:
+        import traceback
+        print(f"[错误] 启动失败: {e}")
+        traceback.print_exc()
+        input("按回车键退出...")
 
 
 if __name__ == "__main__":
