@@ -19,6 +19,7 @@ import sys
 import os
 from PIL import Image
 from control_api_tool import ImprovedMovementController  # 导入移动控制器
+
 # 配置日志
 def setup_logging():
     """设置日志配置"""
@@ -79,7 +80,6 @@ class Memory:
     """
     def __init__(self):
         self.states = []
-        self.move_actions = []
         self.turn_actions = []
         self.logprobs = []
         self.rewards = []
@@ -88,16 +88,14 @@ class Memory:
 
     def clear_memory(self):
         del self.states[:]
-        del self.move_actions[:]
         del self.turn_actions[:]
         del self.logprobs[:]
         del self.rewards[:]
         del self.is_terminals[:]
         del self.action_params[:]
 
-    def append(self, state, move_action, turn_action, logprob, reward, is_terminal, action_param=None):
+    def append(self, state, turn_action, logprob, reward, is_terminal, action_param=None):
         self.states.append(state)
-        self.move_actions.append(move_action)
         self.turn_actions.append(turn_action)
         self.logprobs.append(logprob)
         self.rewards.append(reward)
@@ -314,55 +312,53 @@ class TargetSearchEnvironment:
 
     def calculate_reward(self, detection_results, last_area, action_taken):
         """
-        计算综合奖励 - 权重优化版
-        核心思想：面积变化奖励 >> 朝向中心奖励，避免原地刷分
+        计算综合奖励 - 只考虑转头动作的影响
         """
         # 获取当前最大检测面积
         current_area = self._get_max_detection_area(detection_results) if detection_results else 0
 
-        # 奖励权重 - 重新平衡
-        REWARD_WEIGHT = 300.0  # 靠近/远离奖励权重（大幅提高）
+        # 奖励权重
+        REWARD_WEIGHT = 300.0  # 靠近/远离奖励权重
         STEP_PENALTY = 20.0   # 步数惩罚
         SUCCESS_REWARD = 500.0 # 成功奖励
-        CENTER_REWARD = 10.0   # 朝向中心奖励（大幅降低）
+        CENTER_REWARD = 10.0   # 朝向中心奖励
 
-        # 检查是否是纯转头动作
-        move_action, turn_action = action_taken
-        is_turn_only = (move_action == 0)  # 只转头不移动
+        # 检查是否是转头动作
+        turn_action = action_taken
+        is_turn_only = True  # 现在所有动作都是转头动作
 
-        # 1. 距离变化奖励 - 核心驱动，权重最高
+        # 1. 距离变化奖励 - 基于面积变化
         if is_turn_only:
-            # 纯转头动作：面积变化是正常的，不给奖励避免刷分
-            distance_reward = 0.0
-        else:
-            # 有移动动作：根据面积变化给奖励
+            # 转头动作：面积变化是正常的，但仍给予奖励
             if current_area > last_area:
-                # 靠近目标 - 大奖励
+                # 靠近目标 - 奖励
                 area_ratio = (current_area - last_area) / (CONFIG['IMAGE_WIDTH'] * CONFIG['IMAGE_HEIGHT'])
                 distance_reward = REWARD_WEIGHT * area_ratio * 100
             elif current_area < last_area:
-                # 远离目标或碰到障碍 - 大惩罚
+                # 远离目标 - 惩罚
                 area_ratio = (last_area - current_area) / (CONFIG['IMAGE_WIDTH'] * CONFIG['IMAGE_HEIGHT'])
                 distance_reward = -REWARD_WEIGHT * area_ratio * 100
             else:
-                # 面积不变 - 小惩罚鼓励移动
+                # 面积不变
                 distance_reward = -15.0
+        else:
+            distance_reward = 0.0
 
-        # 2. 朝向中心奖励 - 辅助引导，权重较低
+        # 2. 朝向中心奖励
         center_reward = self._calculate_center_reward(detection_results, CENTER_REWARD)
 
-        # 3. 目标存在奖励 - 基础奖励
+        # 3. 目标存在奖励
         if current_area > 0:
             area_ratio = current_area / (CONFIG['IMAGE_WIDTH'] * CONFIG['IMAGE_HEIGHT'])
-            target_presence_reward = 20.0 * area_ratio  # 降低权重
+            target_presence_reward = 20.0 * area_ratio
         else:
             target_presence_reward = -5.0
 
         # 4. 步数惩罚
         step_penalty = -STEP_PENALTY
 
-        # 5. 重复动作惩罚（避免无限循环）
-        repetition_penalty = self._calculate_repetition_penalty(action_taken)
+        # 5. 重复动作惩罚
+        repetition_penalty = self._calculate_repetition_penalty(turn_action)
 
         # 6. 成功奖励
         if self._check_climb_conditions(detection_results):
@@ -407,49 +403,19 @@ class TargetSearchEnvironment:
         # 取最大朝向中心奖励
         return max(center_rewards) if center_rewards else -5.0
 
-    def _check_stuck(self, current_area, last_area):
+    def _calculate_repetition_penalty(self, turn_action):
         """
-        计算朝向中心的奖励
-        目标越靠近画面中心，奖励越高
-        避免了"距离近但没看向目标"的问题
-        """
-        if not detection_results:
-            return -5.0
-
-        img_width = CONFIG['IMAGE_WIDTH']
-        img_height = CONFIG['IMAGE_HEIGHT']
-        center_x = img_width / 2
-        center_y = img_height / 2
-
-        center_rewards = []
-        for det in detection_results:
-            x1, y1, x2, y2 = det['bbox']
-            det_center_x = (x1 + x2) / 2
-            det_center_y = (y1 + y2) / 2
-
-            dist_x = abs(det_center_x - center_x) / (img_width / 2)
-            dist_y = abs(det_center_y - center_y) / (img_height / 2)
-            dist_avg = (dist_x + dist_y) / 2
-
-            center_reward = reward_weight * (1.0 - dist_avg)
-            center_rewards.append(center_reward)
-
-        return max(center_rewards) if center_rewards else -5.0
-
-    def _calculate_repetition_penalty(self, action_taken):
-        """
-        重复动作惩罚 - 优化版本
+        重复动作惩罚 - 只考虑转头动作
         特别关注转头动作，避免"转到零"的视角混乱问题
         """
-        if not action_taken or len(self.action_history) < 3:
+        if len(self.action_history) < 3:
             return 0.0
 
         recent_actions = list(self.action_history)[-3:]
-        same_action_count = sum(1 for act in recent_actions if act == action_taken)
+        same_action_count = sum(1 for act in recent_actions if act[1] == turn_action)  # 只比较转头动作
 
         # 检查是否是重复的转头动作
-        move_action, turn_action = action_taken
-        turn_only = (move_action == 0)  # 只转头不移动
+        turn_only = True  # 所有动作都只是转头
 
         if turn_only:
             # 纯转头动作，检查是否在来回转头（左-右-左-右）
@@ -483,14 +449,14 @@ class TargetSearchEnvironment:
             return 0
         return max([det['width'] * det['height'] for det in detection_results])
 
-    def step(self, move_action, turn_action, move_forward_step=5, turn_angle=30):
+    def step(self, turn_action, turn_angle=30):
         """
         执行动作并返回新的状态、奖励和是否结束
+        现在只执行转头动作，不执行移动动作
         """
-        move_action_names = ["forward", "backward", "strafe_left", "strafe_right"]
         turn_action_names = ["turn_left", "turn_right"]
         
-        self.logger.debug(f"执行动作: 移动-{move_action_names[move_action]}, 转头-{turn_action_names[turn_action]}, 步长: {move_forward_step}, 角度: {turn_angle}")
+        self.logger.debug(f"执行动作: 转头-{turn_action_names[turn_action]}, 角度: {turn_angle}")
         
         # 执行动作前先检查当前状态
         pre_action_state = self.capture_screen()
@@ -504,17 +470,7 @@ class TargetSearchEnvironment:
             self.reset_to_origin()
             return pre_action_state, 0, True, pre_action_detections
 
-        # 执行动作
-        move_duration = move_forward_step / 10.0  # 将步长转换为持续时间
-        if move_action == 0:  # forward
-            self.movement_controller.move_forward(duration=move_duration)
-        elif move_action == 1:  # backward
-            self.movement_controller.move_backward(duration=move_duration)
-        elif move_action == 2:  # strafe_left
-            self.movement_controller.strafe_left(duration=move_duration)
-        elif move_action == 3:  # strafe_right
-            self.movement_controller.strafe_right(duration=move_duration)
-
+        # 只执行转头动作，移除移动动作
         if turn_action == 0:  # turn_left
             self.movement_controller.turn_left(angle=turn_angle)
         elif turn_action == 1:  # turn_right
@@ -528,7 +484,7 @@ class TargetSearchEnvironment:
         climb_detected = self._check_climb_conditions(detection_results)
         
         # 计算奖励
-        reward, new_area = self.calculate_reward(detection_results, self.last_area, (move_action, turn_action))
+        reward, new_area = self.calculate_reward(detection_results, self.last_area, turn_action)
         
         # 更新步数
         self.step_count += 1
@@ -544,7 +500,7 @@ class TargetSearchEnvironment:
         self.logger.info(f"S {self.step_count}, A: {new_area:.2f}, R: {reward:.2f}")
         
         # 更新动作历史
-        self.action_history.append((move_action, turn_action))
+        self.action_history.append((0, turn_action))  # move_action设为0
         
         # 修改：只有在达到最大步数时才重置，避免重复重置
         if done and not climb_detected:  # 如果不是因为climb而结束，也要重置
@@ -630,9 +586,9 @@ class TargetSearchEnvironment:
 
 class PolicyNetwork(nn.Module):
     """
-    策略网络 - 增强版，使用更多卷积层和batch normalization
+    策略网络 - 修改版，只输出转头动作
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim):
+    def __init__(self, state_dim, turn_action_dim):
         super(PolicyNetwork, self).__init__()
 
         # 更深的卷积特征提取器
@@ -664,14 +620,7 @@ class PolicyNetwork(nn.Module):
             nn.Dropout(0.2)
         )
 
-        # 移动动作策略头
-        self.move_policy = nn.Sequential(
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, move_action_dim)
-        )
-
-        # 转头动作策略头
+        # 转头动作策略头（移动动作固定为不移动）
         self.turn_policy = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -690,39 +639,43 @@ class PolicyNetwork(nn.Module):
         x = x / 255.0
 
         # 调试：检查输入统计信息
-        self.input_mean = x.mean().item()
-        self.input_std = x.std().item()
+        if hasattr(self, 'input_mean'):
+            self.input_mean = x.mean().item()
+            self.input_std = x.std().item()
 
         conv_features = self.conv_layers(x)  # 卷积特征提取
-        self.conv_mean = conv_features.mean().item()
-        self.conv_std = conv_features.std().item()
+        if hasattr(self, 'conv_mean'):
+            self.conv_mean = conv_features.mean().item()
+            self.conv_std = conv_features.std().item()
 
         conv_features = self.global_avg_pool(conv_features)  # 全局平均池化 (B, 256, 1, 1)
         conv_features = conv_features.view(conv_features.size(0), -1)  # 展平 (B, 256)
         shared_features = self.fc_shared(conv_features)  # 共享全连接层处理
 
-        move_logits = self.move_policy(shared_features)      # 移动动作logits
+        # 移动动作固定为不移动
+        batch_size = x.size(0)
+        move_probs = torch.ones(batch_size, 1)  # 不移动概率为1
         turn_logits = self.turn_policy(shared_features)      # 转头动作logits
         state_values = self.value_head(shared_features)     # 状态价值
 
-        move_probs = torch.softmax(move_logits, dim=-1)
         turn_probs = torch.softmax(turn_logits, dim=-1)
 
         return move_probs, turn_probs, state_values
+
 class PPOAgent:
     """
-    PPO智能体 - 增强版
+    PPO智能体 - 增强版，只输出转头动作
     """
-    def __init__(self, state_dim, move_action_dim, turn_action_dim, lr=0.001, gamma=0.99, K_epochs=10, eps_clip=0.2):
+    def __init__(self, state_dim, turn_action_dim, lr=0.001, gamma=0.99, K_epochs=10, eps_clip=0.2):
         self.lr = lr  # 提高学习率
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs  # 增加更新轮数
         self.entropy_coef = 0.01  # 熵正则化系数，鼓励探索
 
-        self.policy = PolicyNetwork(state_dim, move_action_dim, turn_action_dim)
+        self.policy = PolicyNetwork(state_dim, turn_action_dim)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr, weight_decay=1e-5)
-        self.policy_old = PolicyNetwork(state_dim, move_action_dim, turn_action_dim)
+        self.policy_old = PolicyNetwork(state_dim, turn_action_dim)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
         self.MseLoss = nn.MSELoss()
@@ -737,7 +690,7 @@ class PPOAgent:
 
     def select_action(self, state, memory, return_debug_info=False):
         """
-        选择动作 - 增强版，输出更详细的信息
+        选择动作 - 只选择转头动作
         """
         # 确保输入状态的形状正确
         if len(state.shape) == 3:  # (H, W, C)
@@ -756,41 +709,35 @@ class PPOAgent:
         with torch.no_grad():
             move_probs, turn_probs, state_values = self.policy_old(state_tensor)
 
-            # 打印更详细的神经网络输出
-            move_probs_np = move_probs.squeeze().cpu().numpy()
+            # 转头动作概率
             turn_probs_np = turn_probs.squeeze().cpu().numpy()
             value_np = state_values.squeeze().cpu().numpy()
 
-            move_max_idx = np.argmax(move_probs_np)
             turn_max_idx = np.argmax(turn_probs_np)
 
-            # 从策略分布中采样动作
-            move_dist = torch.distributions.Categorical(move_probs)
+            # 从策略分布中采样转头动作
             turn_dist = torch.distributions.Categorical(turn_probs)
-
-            move_action = move_dist.sample()
             turn_action = turn_dist.sample()
 
-            logprob = move_dist.log_prob(move_action) + turn_dist.log_prob(turn_action)
+            # 计算对数概率
+            logprob = turn_dist.log_prob(turn_action)
 
             # 只在前10步打印详细信息，后面简化输出
             if len(memory.rewards) < 10:
-                entropy = move_dist.entropy().mean() + turn_dist.entropy().mean()
-                self.logger.info(f"[网络] 移动: [{move_probs_np[0]:.3f} {move_probs_np[1]:.3f} {move_probs_np[2]:.3f} {move_probs_np[3]:.3f}] "
-                               f"转头: [{turn_probs_np[0]:.3f} {turn_probs_np[1]:.3f}] 价值: {value_np:.3f} | "
-                               f"最佳: 移动-{move_max_idx}, 转头-{turn_max_idx} | "
-                               f"输入均值: {self.policy_old.input_mean:.3f}, "
-                               f"卷积均值: {self.policy_old.conv_mean:.3f}")
-                self.logger.info(f"[探索] 移动熵: {move_dist.entropy().mean():.4f}, 转头熵: {turn_dist.entropy().mean():.4f}, 总熵: {entropy:.4f}")
+                entropy = turn_dist.entropy().mean()
+                self.logger.info(f"[网络] 转头: [{turn_probs_np[0]:.3f} {turn_probs_np[1]:.3f}] 价值: {value_np:.3f} | "
+                               f"最佳: 转头-{turn_max_idx} | "
+                               f"输入均值: {getattr(self.policy_old, 'input_mean', 0):.3f}, "
+                               f"卷积均值: {getattr(self.policy_old, 'conv_mean', 0):.3f}")
+                self.logger.info(f"[探索] 转头熵: {turn_dist.entropy().mean():.4f}, 总熵: {entropy:.4f}")
 
         # 固定动作参数
-        move_forward_step = 2
+        move_forward_step = 0  # 不移动
         turn_angle = 30
 
         # 存储到记忆中
         memory.append(
             state_tensor.squeeze(0),
-            move_action.item(),
             turn_action.item(),
             logprob.item(),
             0,
@@ -799,16 +746,16 @@ class PPOAgent:
         )
 
         if return_debug_info:
-            return move_action.item(), turn_action.item(), move_forward_step, turn_angle, {
-                'move_probs': move_probs.cpu().numpy(),
+            return turn_action.item(), move_forward_step, turn_angle, {
                 'turn_probs': turn_probs.cpu().numpy(),
                 'value': state_values
             }
 
-        return move_action.item(), turn_action.item(), move_forward_step, turn_angle
+        return turn_action.item(), move_forward_step, turn_angle
+
     def update(self, memory):
         """
-        更新策略 - 增强版，添加熵正则化
+        更新策略 - 只更新转头动作
         """
         # 计算折扣奖励
         rewards = []
@@ -825,7 +772,6 @@ class PPOAgent:
 
         # 转换为张量 - 确保维度正确
         old_states = torch.stack(memory.states).detach()
-        old_actions_move = torch.LongTensor(memory.move_actions).detach()
         old_actions_turn = torch.LongTensor(memory.turn_actions).detach()
         old_logprobs = torch.FloatTensor(memory.logprobs).detach()
 
@@ -837,11 +783,10 @@ class PPOAgent:
             move_probs, turn_probs, state_values = self.policy(old_states)
 
             # 创建分布
-            move_dist = torch.distributions.Categorical(move_probs)
             turn_dist = torch.distributions.Categorical(turn_probs)
 
             # 计算新旧策略比率
-            logprobs = move_dist.log_prob(old_actions_move) + turn_dist.log_prob(old_actions_turn)
+            logprobs = turn_dist.log_prob(old_actions_turn)
             ratio = torch.exp(logprobs - old_logprobs)
 
             # 计算优势（使用GAE-like标准化）
@@ -857,9 +802,8 @@ class PPOAgent:
             critic_loss = self.MseLoss(state_values.squeeze(), rewards)
 
             # 熵正则化 - 鼓励探索，防止策略过早收敛
-            move_entropy = move_dist.entropy().mean()
             turn_entropy = turn_dist.entropy().mean()
-            entropy_loss = -(move_entropy + turn_entropy)
+            entropy_loss = -turn_entropy
 
             # 总损失
             loss = actor_loss + 0.5 * critic_loss + self.entropy_coef * entropy_loss
@@ -897,6 +841,7 @@ class PPOAgent:
             self.logger.info(f"损失: {self.loss_history[-1]:.4f}, "
                            f"梯度范数: {self.gradient_norms[-1]:.4f}, "
                            f"参数范数: {self.parameter_norms[-1]:.4f}")
+
     def save_checkpoint(self, checkpoint_path):
         """
         保存检查点
@@ -938,25 +883,24 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
         # 训练模式：使用act方法
         if training_mode:
             if print_debug:
-                move_action, turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.select_action(
+                turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.select_action(
                     state, episode_memory, return_debug_info=True)
                 
                 # 打印调试信息
-                if 'move_probs' in debug_info:
-                    print(f"move_probs shape: {np.array(debug_info['move_probs']).shape}")
+                if 'turn_probs' in debug_info:
                     print(f"turn_probs shape: {np.array(debug_info['turn_probs']).shape}")
-                    print(f"move_action: {move_action}, turn_action: {turn_action}")
+                    print(f"turn_action: {turn_action}")
             else:
-                move_action, turn_action, move_forward_step, turn_angle = ppo_agent.select_action(
+                turn_action, move_forward_step, turn_angle = ppo_agent.select_action(
                     state, episode_memory)
         else:
             # 评估模式：使用确定性动作
-            move_action, turn_action, move_forward_step, turn_angle = ppo_agent.select_action(
+            turn_action, move_forward_step, turn_angle = ppo_agent.select_action(
                 state, episode_memory)
         
-        # 执行环境步骤
+        # 执行环境步骤（只传入转头动作）
         next_state, reward, done, detection_results = env.step(
-            move_action, turn_action, move_forward_step, turn_angle)
+            turn_action, turn_angle)
         
         # 检查是否检测到climb
         climb_detected = env._check_climb_conditions(detection_results)
@@ -1001,12 +945,10 @@ def evaluate_trained_ppo_agent(model_path, evaluation_episodes=10):
     # 创建环境和智能体
     env = TargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
     
-    move_action_dim = 4  # forward, backward, strafe_left, strafe_right
     turn_action_dim = 2  # turn_left, turn_right
 
     ppo_agent = PPOAgent(
         (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640)),
-        move_action_dim,
         turn_action_dim
     )
     
@@ -1073,12 +1015,10 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
     # 创建环境和智能体
     env = TargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
     
-    move_action_dim = 4  # forward, backward, strafe_left, strafe_right
     turn_action_dim = 2  # turn_left, turn_right
 
     ppo_agent = PPOAgent(
         (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640)),
-        move_action_dim,
         turn_action_dim,
         lr=CONFIG['LEARNING_RATE'],
         gamma=CONFIG['GAMMA'],
@@ -1118,14 +1058,14 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
         total_reward = 0
 
         for t in range(env.max_steps):
-            # 智能体选择动作
-            move_action, turn_action, move_step, turn_angle = ppo_agent.select_action(
+            # 智能体选择动作（只选择转头动作）
+            turn_action, move_step, turn_angle = ppo_agent.select_action(
                 state, memory
             )
 
-            # 执行环境步骤
+            # 执行环境步骤（只传入转头动作）
             next_state, reward, done, detections = env.step(
-                move_action, turn_action, move_step, turn_angle
+                turn_action, turn_angle
             )
 
             # 更新记忆中的奖励和终端状态
@@ -1188,12 +1128,10 @@ def create_environment_and_agent():
     # 创建环境
     env = TargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
 
-    move_action_dim = 4  # forward, backward, strafe_left, strafe_right
     turn_action_dim = 2  # turn_left, turn_right
 
     ppo_agent = PPOAgent(
         (3, CONFIG.get('IMAGE_HEIGHT', 480), CONFIG.get('IMAGE_WIDTH', 640)),
-        move_action_dim,
         turn_action_dim
     )
 
