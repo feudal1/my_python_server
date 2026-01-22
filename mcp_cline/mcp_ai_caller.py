@@ -307,9 +307,16 @@ class MCPAICaller(QMainWindow):
         self._setup_window()
         self._initialize_services()
         self._initialize_clients()
+        self._setup_knowledge_base()  # 新增知识库功能
         self._setup_ui()
         self._setup_shortcuts()
         self._setup_signal_connections()
+        
+        # 默认启动工作分析模式
+        self.work_analysis_mode = True
+        self.tool_activation_pending = False
+        self.tool_activation_start_time = None
+        self.async_refresh_tools_list()  # 默认寻找MCP工具
 
     def _setup_initial_variables(self):
         """设置初始变量"""
@@ -348,7 +355,14 @@ class MCPAICaller(QMainWindow):
         # 吐槽控制：每3个VLM消息触发一次吐槽
         self.vlm_commentary_threshold = 3  # 吐槽阈值
         self.vlm_count_since_last_commentary = 0  # 距离上次吐槽的VLM数量
-    
+
+        # 工具激活相关
+        self.tool_activation_pending = False
+        self.tool_activation_start_time = None
+
+        # 知识库
+        self.knowledge_base = []
+
     def _setup_memory_system(self):
         """设置记忆系统"""
         memory_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "game_memory.json")
@@ -370,6 +384,34 @@ class MCPAICaller(QMainWindow):
         self.game_memory = GameMemory(memory_file)
         self.memory_injector = MemoryPromptInjector(self.game_memory)
         self.game_memory.load_memory()
+
+    def _setup_knowledge_base(self):
+        """设置知识库"""
+        knowledge_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge.txt")
+        self.knowledge_base = []
+        
+        if os.path.exists(knowledge_file):
+            try:
+                with open(knowledge_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    # 按行分割知识库内容
+                    self.knowledge_base = [line.strip() for line in content.split('\n') if line.strip()]
+            except Exception as e:
+                print(f"加载知识库失败: {e}")
+                self.knowledge_base = []
+        else:
+            # 创建默认知识库文件
+            with open(knowledge_file, 'w', encoding='utf-8') as f:
+                f.write("# 工作流程知识库\n")
+                f.write("建模步骤: 设计草图 -> 建立基础模型 -> 添加细节 -> 渲染输出\n")
+                f.write("日常任务: 查看邮件 -> 回复重要信息 -> 执行项目任务 -> 总结报告\n")
+                f.write("会议准备: 准备材料 -> 检查设备 -> 预演内容 -> 发送提醒\n")
+            self.knowledge_base = [
+                "建模步骤: 设计草图 -> 建立基础模型 -> 添加细节 -> 渲染输出",
+                "日常任务: 查看邮件 -> 回复重要信息 -> 执行项目任务 -> 总结报告",
+                "会议准备: 准备材料 -> 检查设备 -> 预演内容 -> 发送提醒"
+            ]
+
     def _setup_timers(self):
         """设置定时器"""
         # 设置定时器，每30秒自动记录游戏状态
@@ -422,8 +464,9 @@ class MCPAICaller(QMainWindow):
         self.tool_loader.tools_loaded.connect(self.on_tools_loaded)
         self.tool_loader.loading_failed.connect(self.on_tools_loading_failed)
         
-        # 不在启动时加载工具，改为懒加载
+        # 启动时自动加载工具
         self.tools_loaded_once = False
+        self.async_refresh_tools_list()  # 默认寻找MCP工具
 
     def on_tools_loaded(self, data_tuple: Tuple[Dict, Dict]):
         """
@@ -597,6 +640,7 @@ class MCPAICaller(QMainWindow):
         print(f"[UI DEBUG] 文本已添加，当前行数: {len(lines)}")  # 调试输出
 
         # 不再自动清空，保留所有历史记录，向上滚动查看
+
     def send_message(self):
         """发送消息处理"""
         user_input = self.input_text.text().strip()
@@ -611,14 +655,117 @@ class MCPAICaller(QMainWindow):
             self.show_memory_summary()
         elif user_input == '/mc':
             self.clear_memory()
-        elif user_input == '/g':
-            self.toggle_tactical_analyzer_mode()
+        elif user_input == '/t':  # 处理工具激活确认
+            self.confirm_tool_activation()
         elif user_input.startswith('/r ') and len(user_input) > 3:
             self._handle_run_command(user_input[3:].strip())
         elif user_input == '/clear_conv':
             self.clear_conversation_history()
+        elif user_input.startswith('/work '):  # 工作相关命令
+            work_command = user_input[6:].strip()
+            self.process_work_command(work_command)
         else:
+            # 默认处理用户输入，包括工作分析
             self.process_message_with_function_call(user_input)
+
+    def confirm_tool_activation(self):
+        """确认工具激活"""
+        if self.tool_activation_pending and self.tool_activation_start_time:
+            elapsed = (datetime.now() - self.tool_activation_start_time).seconds
+            if elapsed <= 20:
+                self.tool_activation_pending = False
+                self.tool_activation_start_time = None
+                self.add_caption_line("[系统] 工具激活确认，开始执行...")
+                
+                # 执行工具推荐
+                self.recommend_tools_based_on_context()
+            else:
+                self.tool_activation_pending = False
+                self.tool_activation_start_time = None
+                self.add_caption_line("[系统] 工具激活已超时")
+        else:
+            self.add_caption_line("[系统] 没有待确认的工具激活")
+
+    def recommend_tools_based_on_context(self):
+        """根据当前上下文推荐工具"""
+        # 分析当前工作状态，推荐合适的工具
+        context_analysis = self.analyze_current_context()
+        
+        # 生成工具推荐提示
+        recommendation_prompt = f"""当前工作环境分析：{context_analysis}
+
+基于当前工作状态，从以下可用工具中推荐最合适的：
+{json.dumps(self.all_tools_mapping, ensure_ascii=False, indent=2)}
+
+请推荐最适合当前工作的工具，并说明原因。"""
+        
+        try:
+            result = self.llm_service.create([{"role": "user", "content": recommendation_prompt}])
+            recommendation = ContentExtractor.extract_content_from_response(result)
+            
+            if recommendation:
+                self.add_caption_line(f"[工具推荐] {recommendation}")
+        except Exception as e:
+            self.add_caption_line(f"工具推荐失败: {str(e)}")
+
+    def analyze_current_context(self):
+        """分析当前工作上下文"""
+        # 结合记忆、当前输入和知识库分析上下文
+        recent_memory = self.game_memory.get_recent_memories(5)
+        recent_conversations = self.conversation_history[-5:] if self.conversation_history else []
+        
+        context_info = {
+            "recent_memories": [mem.get("action", "") for mem in recent_memory],
+            "recent_conversations": [conv.get("content", "") for conv in recent_conversations],
+            "knowledge_base": self.knowledge_base,
+            "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        return json.dumps(context_info, ensure_ascii=False)
+
+    def process_work_command(self, command: str):
+        """处理工作相关命令"""
+        # 将工作命令加入对话历史
+        self.conversation_history.append({"role": "user", "content": f"工作命令: {command}"})
+        
+        # 加入知识库信息
+        knowledge_context = "\n".join(self.knowledge_base)
+        enhanced_command = f"""工作知识库:
+{knowledge_context}
+
+当前工作命令: {command}
+
+请分析这个工作命令并提供建议或执行方案。"""
+        
+        messages = [{"role": "user", "content": enhanced_command}]
+        
+        try:
+            result = self.llm_service.create(messages, tools=self.get_mcp_tools_schema() if self.tools_by_server else None)
+            response = ContentExtractor.extract_content_from_response(result)
+            
+            if response:
+                self.add_caption_line(response)
+                # 将AI回复添加到对话历史
+                self.conversation_history.append({"role": "assistant", "content": response})
+                
+                # 检查是否需要激活工具
+                if self.should_activate_tools_for_response(response):
+                    self.request_tool_activation()
+                    
+        except Exception as e:
+            self.add_caption_line(f"处理工作命令时出错: {str(e)}")
+
+    def should_activate_tools_for_response(self, response: str) -> bool:
+        """判断响应是否需要激活工具"""
+        # 如果响应中包含"建议使用"、"推荐使用"、"可以使用"等词汇，则提示激活工具
+        activation_keywords = ["建议使用", "推荐使用", "可以使用", "应该使用", "需要使用", "考虑使用"]
+        return any(keyword in response for keyword in activation_keywords)
+
+    def request_tool_activation(self):
+        """请求工具激活"""
+        self.tool_activation_pending = True
+        self.tool_activation_start_time = datetime.now()
+        self.add_caption_line("[系统] 检测到工具建议，输入 /t 确认激活工具 (20秒内有效)")
 
     def clear_conversation_history(self):
         """清除对话历史"""
@@ -814,6 +961,11 @@ class MCPAICaller(QMainWindow):
             # 工具调用，不注入记忆
             messages = self.conversation_history[-10:]  # 只使用最近10条对话
         
+        # 加入知识库信息
+        knowledge_context = "\n".join(self.knowledge_base)
+        if knowledge_context:
+            messages[0]["content"] = f"工作知识库:\n{knowledge_context}\n\n{messages[0].get('content', '')}"
+
         tools_schema = self.get_mcp_tools_schema() if self.tools_by_server else None
 
         try:
@@ -940,7 +1092,7 @@ class MCPAICaller(QMainWindow):
             self.last_recorded_action = action
             self.game_memory.add_memory(
                 action=action,
-                context=f"玩家提问: {user_input}",
+                context=f"用户提问: {user_input}",
                 analysis=analysis
             )
             print(f"[记忆已记录] 行动: {action}")
@@ -951,24 +1103,37 @@ class MCPAICaller(QMainWindow):
         """自动记录游戏状态（每30秒调用一次）"""
         # 只有当有记录的行动时才自动记录
         if self.last_recorded_action:
-            self.add_caption_line("[系统] 自动记录游戏状态...")
+            self.add_caption_line("[系统] 自动记录工作状态...")
             self.game_memory.add_memory(
                 action=f"持续执行: {self.last_recorded_action}",
                 context="30秒时间节点记录",
-                analysis="等待玩家下一步指令"
+                analysis="等待用户下一步指令"
             )
             print(f"[自动记录] 时间: {datetime.now().strftime('%H:%M:%S')}")
 
     def _send_vlm_history_to_llm(self):
-        """将VLM历史记录发送给LLM进行妹妹式吐槽"""
+        """将VLM历史记录发送给LLM进行吐槽，支持工具调用建议"""
         if not self.vlm_history:
             return
 
         # 构建历史记录摘要
         history_summary = "\n".join([f"[{item['time']}] {item['action']}" for item in self.vlm_history])
 
-        # 发送给LLM进行妹妹式吐槽
-        commentary_prompt = f"""我哥哥在玩游戏，这是我看到的他最近的游戏操作：
+        # 根据工作模式生成不同的吐槽提示
+        if self.work_analysis_mode:
+            commentary_prompt = f"""我正在工作，这是我最近的操作：
+
+{history_summary}
+
+你是我的工作助手，分析我的工作状态并提供建议：
+1. 如果我在建模或开发，给出专业建议
+2. 如果工作效率不高，提出改进意见
+3. 如有必要，推荐可使用的工具来提高效率
+4. 语气友善但专业，40-70字之间
+5. 如果检测到适合使用工具的情况，明确指出
+6. 推荐具体的MCP工具（如果有）"""
+        else:
+            commentary_prompt = f"""我哥哥在玩游戏，这是我看到的他最近的游戏操作：
 
 {history_summary}
 
@@ -981,22 +1146,32 @@ class MCPAICaller(QMainWindow):
 6. 40-70字之间
 7. 语气要像傲娇妹妹一边嫌弃一边偷偷关注哥哥玩游戏
 
-好操作例子："哼，这波还勉强凑合吧，笨蛋哥哥总算有点长进了~"
-差操作例子："笨蛋哥哥！都说了别送人头，真拿你没办法，啧~"
-一般操作："才、才不是在看你玩呢，只是顺便看到而已啦！"
-"""
+此外，如果发现可以使用工具改善游戏体验，推荐相应的MCP工具。"""
 
         try:
-            commentary = self.llm_service.create([{"role": "user", "content": commentary_prompt}])
+            # 包含可用工具信息
+            tools_info = json.dumps(self.all_tools_mapping, ensure_ascii=False) if self.all_tools_mapping else "无可用工具"
+            complete_prompt = f"{commentary_prompt}\n\n可用MCP工具列表：\n{tools_info}"
+            
+            commentary = self.llm_service.create([{"role": "user", "content": complete_prompt}])
             commentary_text = ContentExtractor.extract_content_from_response(commentary)
 
             if commentary_text:
                 self.add_caption_line(f"[吐槽] {commentary_text}")
+                
+                # 检查吐槽内容是否包含工具推荐
+                if self.contains_tool_suggestion(commentary_text):
+                    self.request_tool_activation()
         except Exception as e:
             print(f"获取LLM吐槽失败: {e}")
 
         # 清空历史记录
         self.vlm_history.clear()
+
+    def contains_tool_suggestion(self, text: str) -> bool:
+        """检查文本是否包含工具建议"""
+        tool_keywords = ["工具", "使用", "推荐", "建议", "MCP", "执行", "运行", "调用"]
+        return any(keyword in text for keyword in tool_keywords)
 
     def show_memory_summary(self):
         """显示记忆摘要"""
@@ -1029,8 +1204,8 @@ class MCPAICaller(QMainWindow):
             self.screenshot_timer.start(2000)  # 2秒
             self.tactical_analyzer_timer.start(10000)  # 10秒
             
-            self.add_caption_line("[战术分析师] 模式已启动")
-            self.add_caption_line("[战术分析师] 每2秒截图，每10秒分析5张图")
+            self.add_caption_line("[工作分析师] 模式已启动")
+            self.add_caption_line("[工作分析师] 每2秒截图，每10秒分析5张图")
             self.caption_text.update()
             QApplication.processEvents()
         else:
@@ -1039,7 +1214,7 @@ class MCPAICaller(QMainWindow):
             if self.tactical_analyzer_timer:
                 self.tactical_analyzer_timer.stop()
             self.screenshot_buffer = []
-            self.add_caption_line("[战术分析师] 模式已停止")
+            self.add_caption_line("[工作分析师] 模式已停止")
             self.caption_text.update()
             QApplication.processEvents()
     
@@ -1082,6 +1257,7 @@ class MCPAICaller(QMainWindow):
         except Exception as e:
             print(f"截图失败: {e}")
             return None
+
     def get_latest_screenshot(self) -> Optional[str]:
         """
         获取最新的游戏截图
@@ -1168,9 +1344,10 @@ class MCPAICaller(QMainWindow):
             import traceback
             traceback.print_exc()
             return None
+
     def auto_tactical_analysis(self):
-        """自动战术分析（每10秒调用一次）- 使用5张截图一起分析"""
-        if not self.tactical_analyzer_mode:
+        """自动工作/游戏环境分析（每10秒调用一次）- 使用5张截图一起分析"""
+        if not self.work_analysis_mode:
             return
 
         # 检查是否有足够的截图
@@ -1184,7 +1361,7 @@ class MCPAICaller(QMainWindow):
 
         # 将请求加入队列
         vlm_request = {
-            'type': 'tactical_analysis',
+            'type': 'environment_analysis',
             'screenshots': screenshots_to_analyze
         }
         self.vlm_request_queue.append(vlm_request)
@@ -1205,8 +1382,23 @@ class MCPAICaller(QMainWindow):
         # 取出第一个请求
         request = self.vlm_request_queue.pop(0)
 
-        # 构建提示词
-        full_prompt = """这5张是连续2秒间隔的游戏截图，请综合分析游戏角色在这10秒内的行为变化和动作序列。
+        # 根据工作模式构建不同提示词
+        if self.work_analysis_mode:
+            full_prompt = """这5张是连续2秒间隔的桌面截图，请综合分析当前工作环境和正在进行的操作。
+
+重点关注：
+1. 建模软件：CAD、Blender、Maya、SolidWorks等
+2. 办公软件：文档编辑、表格处理、演示文稿
+3. 开发环境：代码编辑器、IDE、终端
+4. 工作进度：当前操作、遇到的问题、下一步计划
+
+要求：
+- 识别当前使用的软件和工具
+- 描述正在进行的工作内容
+- 用50字以内概括当前工作状态
+- 提供可能的改进建议"""
+        else:
+            full_prompt = """这5张是连续2秒间隔的游戏截图，请综合分析游戏角色在这10秒内的行为变化和动作序列。
 
 重点关注：
 1. 击杀瞬间：角色击杀敌人的画面（血条消失、敌人倒下等）
@@ -1280,11 +1472,13 @@ class MCPAICaller(QMainWindow):
     def _fallback_single_image_analysis(self, image_path: str):
         """fallback到单图分析"""
         try:
-            full_prompt = """用20字以内简短描述游戏角色此刻正在做什么。
+            full_prompt = """用20字以内简短描述当前正在做什么。
 
 重点关注：
-1. 击杀瞬间：标注"击杀"
-3. 战斗状态：交火、受伤,快速进攻,缓慢推进，占领等
+1. 建模：CAD、Blender、Maya、SolidWorks等
+2. 办公：文档编辑、表格处理、演示文稿
+3. 开发：代码编辑器、IDE、终端
+4. 工作状态：编辑、设计、调试、浏览等
 
 只描述动作和场景，不要剧情描写。"""
             
@@ -1371,5 +1565,7 @@ def main():
     window.setGeometry(200, 200, 500, 300)  # 增加宽度和高度
     window.show()
     sys.exit(app.exec())
+
+
 if __name__ == "__main__":
     main()
