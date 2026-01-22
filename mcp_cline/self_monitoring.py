@@ -8,7 +8,12 @@ import threading
 import time
 from datetime import datetime
 from typing import List, Optional
-from PIL import ImageGrab
+from PIL import ImageGrab, Image
+import win32gui
+import win32ui
+import win32con
+import win32api
+from ctypes import windll
 
 # 添加当前目录到路径,支持直接运行
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,7 +32,7 @@ except ImportError:
 class SelfMonitoringThread(threading.Thread):
     """自我监控线程 - 自动截图、VLM分析和吐槽生成"""
 
-    def __init__(self, vlm_service, llm_service, callback_analysis=None, callback_commentary=None, verbose=False, enable_memory=True, callback_memory_retrieved=None, callback_memory_saved=None):
+    def __init__(self, vlm_service, llm_service, callback_analysis=None, callback_commentary=None, verbose=False, enable_memory=False, enable_memory_retrieval=False, callback_memory_retrieved=None, callback_memory_saved=None, callback_hide_windows=None, callback_show_windows=None, blocked_windows=None):
         """
         初始化自我监控线程
 
@@ -38,8 +43,12 @@ class SelfMonitoringThread(threading.Thread):
             callback_commentary: 吐槽结果回调函数
             verbose: 是否输出详细日志到控制台
             enable_memory: 是否启用向量记忆系统
+            enable_memory_retrieval: 是否启用记忆检索功能
             callback_memory_retrieved: 记忆检索回调函数
             callback_memory_saved: 记忆保存回调函数
+            callback_hide_windows: 截图前隐藏窗口回调函数
+            callback_show_windows: 截图后显示窗口回调函数
+            blocked_windows: 要屏蔽的窗口标题列表
         """
         super().__init__(daemon=True)
         self.vlm_service = vlm_service
@@ -48,8 +57,14 @@ class SelfMonitoringThread(threading.Thread):
         self.callback_commentary = callback_commentary
         self.callback_memory_retrieved = callback_memory_retrieved
         self.callback_memory_saved = callback_memory_saved
-        self.verbose = verbose  # 控制是否输出详细日志
+        self.callback_hide_windows = callback_hide_windows
+        self.callback_show_windows = callback_show_windows
+        self.verbose = True  # 强制输出详细日志，便于调试
+        print(f"[自我监控] 初始化参数: enable_memory={enable_memory}, enable_memory_retrieval={enable_memory_retrieval}, HAS_MEMORY={HAS_MEMORY}")
         self.enable_memory = enable_memory and HAS_MEMORY
+        self.enable_memory_retrieval = enable_memory_retrieval and self.enable_memory
+        print(f"[自我监控] 最终设置: self.enable_memory={self.enable_memory}, self.enable_memory_retrieval={self.enable_memory_retrieval}")
+        self.blocked_windows = blocked_windows or []
 
         self.running = False
         self.paused = False
@@ -63,7 +78,7 @@ class SelfMonitoringThread(threading.Thread):
         self.max_screenshots = 50  # 最多保留最新的50张截图（约10分钟）
 
         # 吐槽阈值
-        self.commentary_threshold = 1  # 每次1个VLM分析就触发吐槽
+        self.commentary_threshold = 3  # 每3个VLM分析就触发吐槽
         self.vlm_analysis_history = []  # VLM分析历史
 
         # 截图目录
@@ -136,28 +151,42 @@ class SelfMonitoringThread(threading.Thread):
                     if screenshots:
                         # 2. VLM分析截图
                         vlm_analysis = self._analyze_with_vlm(screenshots)
-                        self._log(f"[自我监控] VLM分析完成: {vlm_analysis[:50] if vlm_analysis else '无'}...")
+                        # 修复：当vlm_analysis为None时，避免尝试切片操作
+                        analysis_preview = vlm_analysis[:50] if vlm_analysis else '无'
+                        self._log(f"[自我监控] VLM分析完成: {analysis_preview}...")
 
                         if vlm_analysis:
                             # 3. 从向量记忆中检索相关记忆 (每回合都检索)
                             relevant_memories = []
-                            if self.vector_memory:
+                            # 调用记忆检索回调，无论记忆检索是否启用
+                            if self.callback_memory_retrieved:
                                 try:
-                                    relevant_memories = self.vector_memory.retrieve_memory(
-                                        query_text=vlm_analysis,
-                                        top_k=3
-                                    )
-                                    if relevant_memories:
-                                        self._log(f"[自我监控] 检索到 {len(relevant_memories)} 条相关记忆")
-
-                                    # 调用记忆检索回调
-                                    if self.callback_memory_retrieved:
+                                    # 尝试从向量记忆中检索相关记忆
+                                    relevant_memories = []
+                                    if self.vector_memory and self.enable_memory_retrieval:
                                         try:
-                                            self.callback_memory_retrieved(vlm_analysis, relevant_memories)
+                                            relevant_memories = self.vector_memory.retrieve_memory(
+                                                query_text=vlm_analysis,
+                                                top_k=3
+                                            )
+                                            if relevant_memories:
+                                                self._log(f"[自我监控] 检索到 {len(relevant_memories)} 条相关记忆")
+                                            else:
+                                                self._log("[自我监控] 未找到相关记忆")
                                         except Exception as e:
-                                            print(f"[自我监控] 记忆检索回调失败: {e}")
+                                            print(f"[自我监控] 检索记忆失败: {e}")
+                                            self._log("[自我监控] 未找到相关记忆")
+                                    else:
+                                        if not self.enable_memory_retrieval:
+                                            self._log("[自我监控] 记忆检索已禁用")
+                                        elif not self.vector_memory:
+                                            self._log("[自我监控] 向量记忆系统不可用")
+                                        self._log("[自我监控] 未找到相关记忆")
+                                    
+                                    # 调用记忆检索回调
+                                    self.callback_memory_retrieved(vlm_analysis, relevant_memories)
                                 except Exception as e:
-                                    print(f"[自我监控] 检索记忆失败: {e}")
+                                    print(f"[自我监控] 记忆检索回调失败: {e}")
 
                             # 4. 添加到历史记录
                             self.vlm_analysis_history.append({
@@ -259,19 +288,92 @@ class SelfMonitoringThread(threading.Thread):
             if self.verbose:
                 print(f"[清理] 清理失败: {e}")
 
+    def _capture_window_by_title(self, window_title):
+        """
+        根据窗口标题截取指定窗口内容，使用PrintWindow API
+
+        Args:
+            window_title: 窗口标题（部分匹配）
+
+        Returns:
+            PIL.Image对象，如果失败返回None
+        """
+        # 查找窗口句柄
+        def enum_windows_callback(hwnd, windows):
+            if win32gui.IsWindowVisible(hwnd):
+                window_text = win32gui.GetWindowText(hwnd)
+                if window_title.lower() in window_text.lower():
+                    windows.append(hwnd)
+            return True
+
+        windows = []
+        win32gui.EnumWindows(enum_windows_callback, windows)
+
+        if not windows:
+            return None
+
+        # 选择第一个匹配的窗口
+        hwnd = windows[0]
+
+        # 获取窗口位置和大小
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width = right - left
+        height = bottom - top
+
+        # 获取设备上下文
+        hwndDC = win32gui.GetWindowDC(hwnd)
+        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
+
+        # 创建位图
+        saveBitMap = win32ui.CreateBitmap()
+        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+        saveDC.SelectObject(saveBitMap)
+
+        # 使用 PrintWindow API 截取窗口
+        result = windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)
+
+        if result:
+            # 转换为PIL图像
+            bmpinfo = saveBitMap.GetInfo()
+            bmpstr = saveBitMap.GetBitmapBits(True)
+
+            im = Image.frombuffer(
+                'RGB',
+                (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+                bmpstr, 'raw', 'BGRX', 0, 1)
+        else:
+            im = None
+
+        # 清理资源
+        win32gui.DeleteObject(saveBitMap.GetHandle())
+        saveDC.DeleteDC()
+        mfcDC.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwndDC)
+
+        return im
+
     def _capture_screenshots(self) -> List[str]:
         """
-        截取5张截图
+        截取5张截图 - 始终截取Endfield窗口
 
         Returns:
             截图文件路径列表
         """
         screenshots = []
+        target_window = "Endfield"  # 目标窗口名称
 
         for i in range(self.screenshots_per_cycle):
             try:
-                # 截取整个屏幕
-                screenshot = ImageGrab.grab()
+                # 使用PrintWindow API截取Endfield窗口
+                screenshot = self._capture_window_by_title(target_window)
+
+                if screenshot:
+                    self._log(f"[截图] 已截取窗口: {target_window}")
+                else:
+                    # 如果无法截取窗口，截取整个屏幕
+                    screenshot = ImageGrab.grab()
+                    self._log(f"[截图] 未找到{target_window}窗口，截取整个屏幕")
 
                 # 生成唯一文件名
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -288,6 +390,25 @@ class SelfMonitoringThread(threading.Thread):
                 if i < self.screenshots_per_cycle - 1:
                     time.sleep(self.screenshot_interval)
 
+            except ImportError:
+                # 如果没有安装win32gui模块，截取整个屏幕
+                screenshot = ImageGrab.grab()
+                self._log("[截图] 未安装win32gui模块，截取整个屏幕")
+                
+                # 生成唯一文件名
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = f"self_monitor_{timestamp}.png"
+
+                # 保存截图
+                filepath = os.path.join(self.screenshots_dir, filename)
+                screenshot.save(filepath, "PNG")
+
+                screenshots.append(filepath)
+                self._log(f"[截图] 第 {i+1}/{self.screenshots_per_cycle} 张已保存: {filename}")
+
+                # 等待间隔（最后一张不需要等待）
+                if i < self.screenshots_per_cycle - 1:
+                    time.sleep(self.screenshot_interval)
             except Exception as e:
                 print(f"[截图] 第 {i+1} 张截图失败: {e}")
 
@@ -308,19 +429,23 @@ class SelfMonitoringThread(threading.Thread):
 
         try:
             # 构建VLM提示词 - 简短对话提取
-            prompt = """请简要分析这5张截图：
+            prompt = """请简要分析这5张截图，只返回一个综合结果：
 
 如果是游戏/对话场景：
-- 只提取角色的对话内容（20字以内）
+- 如果有对话，提取对话（角色A：对话内容 / 角色B：对话内容）
+- 如果没有对话，概括场景（20字以内）
+- 忽略所有工具窗口、UI元素、字幕和分析结果
 - 不要分析工具、不要分析环境
-- 格式：角色A：对话内容 / 角色B：对话内容
+- 不要分析蓝色的、黄色的和绿色的字
 
 如果是工作场景（建模/办公/开发）：
 - 识别软件类型和当前操作
 - 20字以内概括当前状态
+- 不要分析蓝色的和黄色的字
 
-要求：
-- 严格控制在20字以内
+重要要求：
+- 只返回一个综合结果，不要分别分析每张图
+- 严格控制在30字以内
 - 对话只提取文本，不添加任何描述
 - 不要多余的标点符号"""
 
@@ -343,7 +468,14 @@ class SelfMonitoringThread(threading.Thread):
                 self._log("[VLM] 不支持多图分析，使用最后一张截图分析")
                 single_prompt = """简要描述这个截图（20字以内）：
 
-对话场景只提取对话内容，工作场景只说明在做什么"""
+对话场景只提取对话内容，工作场景只说明在做什么
+
+要求：
+- 忽略所有工具窗口、UI元素、字幕和分析结果
+- 不要分析工具、不要分析环境
+- 不要分析蓝色的、黄色的和绿色的字
+- 严格控制在20字以内
+- 直接描述，不要多余的标点符号"""
 
                 vlm_result = self.vlm_service.create_with_image(
                     [{"role": "user", "content": single_prompt}],

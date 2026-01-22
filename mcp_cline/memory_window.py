@@ -25,15 +25,15 @@ class MemoryWindow(QMainWindow):
 
     def _setup_window(self):
         """设置窗口属性"""
-        self.setWindowTitle("🧠 记忆检索 Memory Retrieval")
+        self.setWindowTitle("🧠 系统监控")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # 不设置完全透明背景，使用半透明背景
+        # self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        # 设置窗口位置和大小 (在吐槽窗口下方)
-        self.setGeometry(200, 300, 500, 280)
+        # 不设置窗口位置和大小，使用默认值，由外部调用者设置
 
     def _setup_ui(self):
         """设置UI"""
@@ -43,76 +43,35 @@ class MemoryWindow(QMainWindow):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
 
-        # 标题栏
-        title_label = QLabel("🧠 记忆检索 Memory Retrieval")
-        title_label.setStyleSheet("""
-            QLabel {
-                color: #00ff00;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 5px;
-                border: 2px solid #00ff00;
-                border-radius: 5px;
-                background-color: rgba(0, 0, 0, 180);
-            }
-        """)
-        layout.addWidget(title_label)
-
-        # 检索记录区域
+        # 监控记录区域
         self.retrieve_display = QTextEdit()
         self.retrieve_display.setReadOnly(True)
+        # 隐藏垂直滚动条
+        self.retrieve_display.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 隐藏水平滚动条
+        self.retrieve_display.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.retrieve_display.setStyleSheet("""
             QTextEdit {
-                background-color: rgba(0, 0, 0, 200);
+                background-color: rgba(0, 0, 0, 0);
                 color: #00aaff;
-                border: 2px solid #00aaff;
-                border-radius: 5px;
+                border: none;
                 font-family: Consolas, monospace;
-                font-size: 11px;
+                font-size: 18px;
                 padding: 5px;
             }
         """)
         layout.addWidget(self.retrieve_display)
 
-        # 清空按钮
-        clear_btn = QPushButton("清空检索记录 Clear")
-        clear_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 170, 255, 150);
-                color: white;
-                border: 2px solid #00aaff;
-                border-radius: 5px;
-                padding: 5px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 170, 255, 200);
-            }
-        """)
-        clear_btn.clicked.connect(self.clear_retrieve)
-        layout.addWidget(clear_btn)
-
-    def log_retrieval(self, query_text: str, results: List[Dict]):
+    def log_monitoring(self, message: str):
         """
-        记录检索结果
+        记录监控信息
 
         Args:
-            query_text: 查询文本
-            results: 检索结果列表
+            message: 监控消息文本
         """
         timestamp = __import__('datetime').datetime.now().strftime("%H:%M:%S")
 
-        log_text = f"[{timestamp}] 检索: {query_text[:30]}...\n"
-
-        if results:
-            for i, result in enumerate(results[:3], 1):
-                similarity = 1 - result['distance']
-                memory_text = result['document'][:40]
-                memory_type = result['metadata'].get('type', 'unknown')
-                log_text += f"  {i}. [{memory_type}] {memory_text}... (相似度: {similarity:.2f})\n"
-        else:
-            log_text += "  未找到相关记忆\n"
-
+        log_text = f"[{timestamp}] {message}\n"
         log_text += "-" * 50 + "\n"
 
         # 滚动到顶部并插入
@@ -120,24 +79,63 @@ class MemoryWindow(QMainWindow):
         cursor.movePosition(cursor.MoveOperation.Start)
         cursor.insertText(log_text)
 
+        # 自动滚动到顶部
+        self.retrieve_display.verticalScrollBar().setValue(0)
+
         # 保持最多50条记录
         text = self.retrieve_display.toPlainText()
         lines = text.split('\n')
         if len(lines) > 200:
             self.retrieve_display.setPlainText('\n'.join(lines[-200:]))
+            # 重新滚动到顶部
+            self.retrieve_display.verticalScrollBar().setValue(0)
 
-    def clear_retrieve(self):
-        """清空检索记录"""
+    def clear_monitoring(self):
+        """清空监控记录"""
         self.retrieve_display.clear()
 
-    def update_stats(self, total_memories: int):
+    def update_stats(self, total_monitors: int):
         """
         更新统计信息
 
         Args:
-            total_memories: 总记忆数
+            total_monitors: 总监控数
         """
-        self.setWindowTitle(f"🧠 记忆检索 - {total_memories} 条记忆")
+        self.setWindowTitle(f"🧠 系统监控 - {total_monitors} 项")
+
+    def log_retrieved_memory(self, query_text: str, memories: List[Dict]):
+        """
+        记录检索到的记忆
+
+        Args:
+            query_text: 查询文本
+            memories: 检索到的记忆列表
+        """
+        timestamp = __import__('datetime').datetime.now().strftime("%H:%M:%S")
+
+        log_text = f"[{timestamp}] 检索记忆: {query_text}\n"
+        if memories:
+            for i, memory in enumerate(memories):
+                log_text += f"  记忆 {i+1}: {memory.get('vlm_analysis', '无分析')}\n"
+        else:
+            log_text += "  无相关记忆\n"
+        log_text += "-" * 50 + "\n"
+
+        # 滚动到顶部并插入
+        cursor = self.retrieve_display.textCursor()
+        cursor.movePosition(cursor.MoveOperation.Start)
+        cursor.insertText(log_text)
+
+        # 自动滚动到顶部
+        self.retrieve_display.verticalScrollBar().setValue(0)
+
+        # 保持最多50条记录
+        text = self.retrieve_display.toPlainText()
+        lines = text.split('\n')
+        if len(lines) > 200:
+            self.retrieve_display.setPlainText('\n'.join(lines[-200:]))
+            # 重新滚动到顶部
+            self.retrieve_display.verticalScrollBar().setValue(0)
 
 
 # 测试代码
@@ -151,9 +149,7 @@ if __name__ == "__main__":
     window.show()
 
     # 模拟一些记录
-    window.log_retrieval("猫在地上", [
-        {'distance': 0.1, 'document': '一只猫在沙发上睡觉', 'metadata': {'type': 'monitoring'}},
-        {'distance': 0.2, 'document': '猫从沙发上跳到地板', 'metadata': {'type': 'commentary'}}
-    ])
+    window.log_monitoring("系统监控测试：猫在地上")
+    window.log_monitoring("系统监控测试：狗在沙发上")
 
     sys.exit(app.exec())
