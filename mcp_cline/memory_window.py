@@ -21,7 +21,7 @@ class MemoryWindow(QMainWindow):
     # 定义信号用于线程间通信
     window_shown = pyqtSignal()
     monitoring_logged = pyqtSignal(str)
-    memory_retrieved = pyqtSignal(str, list)
+    memory_retrieved = pyqtSignal(str, str, list)  # query_type, query_text, memories
 
     def __init__(self):
         super().__init__()
@@ -87,28 +87,37 @@ class MemoryWindow(QMainWindow):
         """
         self.setWindowTitle(f"🧠 系统监控 - {total_monitors} 项")
 
-    def log_retrieved_memory(self, query_text: str, memories: List[Dict]):
+    def log_retrieved_memory(self, query_type: str, query_text: str, memories: List[Dict]):
         """
         记录检索到的记忆（只显示检索结果，10秒后隐藏）
 
         Args:
+            query_type: 检索类型（用户输入/VLM分析/联合查询）
             query_text: 查询文本
             memories: 检索到的记忆列表
         """
-        self.memory_retrieved.emit(query_text, memories)
+        self.memory_retrieved.emit(query_type, query_text, memories)
 
-    def _log_retrieved_memory_safe(self, query_text: str, memories: List[Dict]):
+    def _log_retrieved_memory_safe(self, query_type: str, query_text: str, memories: List[Dict]):
         """
         在主线程中安全地记录检索到的记忆
         """
         timestamp = __import__('datetime').datetime.now().strftime("%H:%M:%S")
 
         if memories:
-            # 有检索到记忆，显示检索内容
-            log_text = f"[{timestamp}] 检索到 {len(memories)} 条记忆"
+            # 有检索到记忆，显示检索内容（每条记忆一行，前10个字符）
+            log_lines = [f"[{timestamp}] {query_type}检索到 {len(memories)} 条记忆:"]
+
+            for mem in memories:
+                doc = mem.get('document', '')
+                # 显示主记忆的前10个字符
+                preview = doc[:10] if len(doc) > 10 else doc
+                log_lines.append(f"  - {preview}")
+
+            log_text = '\n'.join(log_lines)
         else:
             # 没有检索到记忆
-            log_text = f"[{timestamp}] 未找到相关记忆"
+            log_text = f"[{timestamp}] {query_type}未找到相关记忆"
 
         # 清空旧内容，只显示最新一条
         self.retrieve_display.clear()

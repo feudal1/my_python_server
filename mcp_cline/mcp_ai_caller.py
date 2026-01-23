@@ -546,8 +546,38 @@ class MCPAICaller(QMainWindow):
                     memory_info += f"使用模型: {stats.get('model', '未知')}\n"
                     memory_info += f"版本: {stats.get('version', '未知')}\n\n"
                     memory_info += "最近记忆:\n"
-                    for i, mem in enumerate(memories[:5]):  # 显示最近5条
-                        memory_info += f"{i+1}. {mem.get('vlm_analysis', '无分析')[:100]}...\n"
+
+                    for i, mem in enumerate(memories[:5]):  # 显示最近5组记忆
+                        # 检查是否为分组后的记忆
+                        if 'main' in mem:
+                            # 新格式：分组记忆
+                            main_mem = mem['main']
+                            memory_info += f"\n[{i+1}] 主记忆 (时间: {main_mem['metadata'].get('datetime', '未知')})\n"
+                            memory_info += f"    VLM分析: {main_mem['document'][:100]}...\n"
+
+                            # 显示LLM吐槽
+                            commentary_id = main_mem['id'].replace('mem_', 'roast_')
+                            related_commentary = [m for m in memories if 'id' in m and m['id'] == commentary_id]
+                            if related_commentary:
+                                memory_info += f"    LLM吐槽: {related_commentary[0]['document'][:100]}...\n"
+
+                            # 显示用户输入
+                            if mem['user_inputs']:
+                                memory_info += f"    用户输入 ({len(mem['user_inputs'])}条):\n"
+                                for idx, user_input in enumerate(mem['user_inputs'][:3]):  # 最多显示3条
+                                    memory_info += f"      - {user_input['document'][:80]}...\n"
+
+                            # 显示VLM分析历史
+                            if mem['vlm_analyses']:
+                                memory_info += f"    VLM分析历史 ({len(mem['vlm_analyses'])}条):\n"
+                                for idx, vlm_analysis in enumerate(mem['vlm_analyses'][:3]):  # 最多显示3条
+                                    memory_info += f"      - {vlm_analysis['document'][:80]}...\n"
+                        else:
+                            # 旧格式：简单记忆
+                            memory_info += f"\n[{i+1}] 记忆 (时间: {mem['metadata'].get('datetime', '未知')})\n"
+                            memory_info += f"    类型: {mem.get('type', 'unknown')}\n"
+                            memory_info += f"    内容: {mem['document'][:100]}...\n"
+
                     QMessageBox.information(self, "数据库记忆", memory_info)
                 else:
                     QMessageBox.information(self, "提示", "向量记忆系统不可用")
@@ -865,17 +895,18 @@ class MCPAICaller(QMainWindow):
             import traceback
             traceback.print_exc()
 
-    def _on_memory_retrieved(self, query_text: str, results: List):
+    def _on_memory_retrieved(self, query_type: str, query_text: str, results: List):
         """
         系统监控回调 - 显示在监控窗口
 
         Args:
+            query_type: 检索类型（用户输入/VLM分析/联合查询）
             query_text: 查询文本
             results: 检索结果
         """
         if hasattr(self, 'memory_window') and self.memory_window:
             # 显示检索到的记忆（log_retrieved_memory 方法会通过信号机制安全地显示窗口）
-            self.memory_window.log_retrieved_memory(query_text, results)
+            self.memory_window.log_retrieved_memory(query_type, query_text, results)
 
     def _on_memory_saved(self, memory_id: str, vlm_analysis: str, llm_commentary: str):
         """

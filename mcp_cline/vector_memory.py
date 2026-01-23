@@ -269,23 +269,25 @@ class VectorMemory:
         # 编码VLM分析
         embedding = self.encode(vlm_analysis)
 
-        # 准备元数据
+        # 准备元数据（创建副本以避免修改原始字典）
         if metadata is None:
             metadata = {}
+        else:
+            # 过滤metadata，只保留支持的类型（str、int、float、bool）
+            filtered_metadata = {}
+            for key, value in metadata.items():
+                if isinstance(value, (str, int, float, bool)):
+                    filtered_metadata[key] = value
+                else:
+                    # 不支持的类型转换为字符串
+                    filtered_metadata[key] = str(value)
+            metadata = filtered_metadata
 
         metadata.update({
             "timestamp": timestamp,
             "datetime": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S"),
             "type": "monitoring"
         })
-
-        # 存储到数据库
-        self.collection.add(
-            embeddings=[embedding],
-            documents=[vlm_analysis],
-            metadatas=[metadata],
-            ids=[memory_id]
-        )
 
         # 保存LLM吐槽到元数据
         commentary_id = f"roast_{timestamp}"
@@ -297,40 +299,171 @@ class VectorMemory:
             "related_analysis_id": memory_id
         })
 
-        self.collection.add(
-            embeddings=[commentary_embedding],
-            documents=[llm_commentary],
-            metadatas=[metadata_commentary],
-            ids=[commentary_id]
-        )
+        # 保存用户输入到数据库（如果存在）
+        user_inputs_data = metadata.get("user_inputs", "")
+        user_inputs_count = 0
+        user_inputs = []
+        if user_inputs_data:
+            try:
+                # 尝试解析为列表
+                import ast
+                user_inputs = ast.literal_eval(user_inputs_data) if isinstance(user_inputs_data, str) else user_inputs_data
+                if isinstance(user_inputs, list):
+                    user_inputs_count = len(user_inputs)
+            except Exception as e:
+                print(f"[记忆系统] 解析用户输入失败: {e}")
 
-        # 保存用户输入到数据库
-        user_inputs = metadata.get("user_inputs", [])
-        for idx, user_input in enumerate(user_inputs):
-            user_input_id = f"user_{timestamp}_{idx}"
-            user_input_embedding = self.encode(user_input)
+        # 保存VLM分析历史到数据库（如果存在）
+        vlm_analyses_data = metadata.get("vlm_analyses", "")
+        vlm_analyses_count = 0
+        vlm_analyses = []
+        if vlm_analyses_data:
+            try:
+                # 尝试解析为列表
+                import ast
+                vlm_analyses = ast.literal_eval(vlm_analyses_data) if isinstance(vlm_analyses_data, str) else vlm_analyses_data
+                if isinstance(vlm_analyses, list):
+                    # 过滤掉当前分析
+                    vlm_analyses = [item for item in vlm_analyses if item != vlm_analysis]
+                    vlm_analyses_count = len(vlm_analyses)
+            except Exception as e:
+                print(f"[记忆系统] 解析VLM分析失败: {e}")
 
-            metadata_user = metadata.copy()
-            metadata_user.update({
-                "type": "user_input",
-                "related_analysis_id": memory_id
-            })
-
+        try:
+            # 存储到数据库
             self.collection.add(
-                embeddings=[user_input_embedding],
-                documents=[user_input],
-                metadatas=[metadata_user],
-                ids=[user_input_id]
+                embeddings=[embedding],
+                documents=[vlm_analysis],
+                metadatas=[metadata],
+                ids=[memory_id]
             )
 
-        self.total_memories += 2 + len(user_inputs)
-        print(f"[记忆系统] 保存记忆: {memory_id}, 吐槽: {commentary_id}, 用户输入: {len(user_inputs)}条")
-        print(f"[记忆系统] VLM分析: {vlm_analysis[:50]}...")
-        print(f"[记忆系统] LLM吐槽: {llm_commentary[:50]}...")
-        if user_inputs:
-            print(f"[记忆系统] 用户输入: {', '.join([ui[:30]+'...' for ui in user_inputs])}")
+            # 保存LLM吐槽
+            self.collection.add(
+                embeddings=[commentary_embedding],
+                documents=[llm_commentary],
+                metadatas=[metadata_commentary],
+                ids=[commentary_id]
+            )
 
-        return memory_id
+            # 保存用户输入
+            if user_inputs:
+                for idx, user_input in enumerate(user_inputs):
+                    user_input_id = f"user_{timestamp}_{idx}"
+                    user_input_embedding = self.encode(user_input)
+
+                    metadata_user = metadata.copy()
+                    metadata_user.update({
+                        "type": "user_input",
+                        "related_analysis_id": memory_id
+                    })
+
+                    self.collection.add(
+                        embeddings=[user_input_embedding],
+                        documents=[user_input],
+                        metadatas=[metadata_user],
+                        ids=[user_input_id]
+                    )
+
+            # 保存VLM分析历史
+            if vlm_analyses:
+                for idx, vlm_analysis_item in enumerate(vlm_analyses):
+                    vlm_analysis_id = f"vlm_{timestamp}_{idx}"
+                    vlm_analysis_embedding = self.encode(vlm_analysis_item)
+
+                    metadata_vlm = metadata.copy()
+                    metadata_vlm.update({
+                        "type": "vlm_analysis",
+                        "related_analysis_id": memory_id
+                    })
+
+                    self.collection.add(
+                        embeddings=[vlm_analysis_embedding],
+                        documents=[vlm_analysis_item],
+                        metadatas=[metadata_vlm],
+                        ids=[vlm_analysis_id]
+                    )
+
+            self.total_memories += 2 + user_inputs_count + vlm_analyses_count
+            print(f"[记忆系统] 保存记忆: {memory_id}, 吐槽: {commentary_id}, 用户输入: {user_inputs_count}条, VLM分析历史: {vlm_analyses_count}条")
+            print(f"[记忆系统] VLM分析: {vlm_analysis[:50]}...")
+            print(f"[记忆系统] LLM吐槽: {llm_commentary[:50]}...")
+            if user_inputs_count > 0:
+                print(f"[记忆系统] 用户输入字符串: {user_inputs_data[:100]}...")
+            if vlm_analyses_count > 0:
+                print(f"[记忆系统] VLM分析历史字符串: {vlm_analyses_data[:100]}...")
+
+            return memory_id
+
+        except Exception as e:
+            print(f"[记忆系统] 保存失败: {e}")
+            # 检查是否是集合不存在的错误
+            if "does not exist" in str(e):
+                # 重新初始化集合
+                if self._reinitialize_collection():
+                    print("[记忆系统] 集合已重新初始化，再次尝试保存")
+                    # 再次尝试保存
+                    try:
+                        # 存储到数据库
+                        self.collection.add(
+                            embeddings=[embedding],
+                            documents=[vlm_analysis],
+                            metadatas=[metadata],
+                            ids=[memory_id]
+                        )
+
+                        # 保存LLM吐槽
+                        self.collection.add(
+                            embeddings=[commentary_embedding],
+                            documents=[llm_commentary],
+                            metadatas=[metadata_commentary],
+                            ids=[commentary_id]
+                        )
+
+                        # 保存用户输入
+                        if user_inputs:
+                            for idx, user_input in enumerate(user_inputs):
+                                user_input_id = f"user_{timestamp}_{idx}"
+                                user_input_embedding = self.encode(user_input)
+
+                                metadata_user = metadata.copy()
+                                metadata_user.update({
+                                    "type": "user_input",
+                                    "related_analysis_id": memory_id
+                                })
+
+                                self.collection.add(
+                                    embeddings=[user_input_embedding],
+                                    documents=[user_input],
+                                    metadatas=[metadata_user],
+                                    ids=[user_input_id]
+                                )
+
+                        # 保存VLM分析历史
+                        if vlm_analyses:
+                            for idx, vlm_analysis_item in enumerate(vlm_analyses):
+                                vlm_analysis_id = f"vlm_{timestamp}_{idx}"
+                                vlm_analysis_embedding = self.encode(vlm_analysis_item)
+
+                                metadata_vlm = metadata.copy()
+                                metadata_vlm.update({
+                                    "type": "vlm_analysis",
+                                    "related_analysis_id": memory_id
+                                })
+
+                                self.collection.add(
+                                    embeddings=[vlm_analysis_embedding],
+                                    documents=[vlm_analysis_item],
+                                    metadatas=[metadata_vlm],
+                                    ids=[vlm_analysis_id]
+                                )
+
+                        self.total_memories += 2 + user_inputs_count + vlm_analyses_count
+                        print(f"[记忆系统] 重新保存成功: {memory_id}")
+                        return memory_id
+                    except Exception as e2:
+                        print(f"[记忆系统] 重新保存失败: {e2}")
+            return None
 
     def retrieve_memory(
         self,
@@ -354,6 +487,30 @@ class VectorMemory:
         else:
             return self.simple_memory.retrieve_memory(query_text, top_k, memory_type)
 
+    def _reinitialize_collection(self):
+        """
+        重新初始化集合
+        """
+        try:
+            print("[记忆系统] 重新初始化集合...")
+            # 尝试删除旧集合（如果存在）
+            try:
+                self.client.delete_collection("agent_memory")
+            except:
+                pass
+            
+            # 创建新集合
+            self.collection = self.client.create_collection(
+                name="agent_memory",
+                metadata={"hnsw:space": "cosine"}  # 使用余弦相似度
+            )
+            self.total_memories = 0
+            print("[记忆系统] 集合重新初始化成功")
+            return True
+        except Exception as e:
+            print(f"[记忆系统] 集合重新初始化失败: {e}")
+            return False
+
     def _retrieve_memory_full(
         self,
         query_text: str,
@@ -375,10 +532,10 @@ class VectorMemory:
             where_filter = {"type": memory_type}
 
         try:
-            # 查询数据库
+            # 查询数据库（多查询几条，过滤后再返回）
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=top_k,
+                n_results=top_k * 2,  # 查询更多的结果，过滤后再返回
                 where=where_filter
             )
 
@@ -386,18 +543,59 @@ class VectorMemory:
             memories = []
             if results['ids'] and results['ids'][0]:
                 for i in range(len(results['ids'][0])):
+                    distance = results['distances'][0][i] if 'distances' in results else 0.0
+                    # 过滤掉距离过大的记忆（相似度太低）
+                    # 余弦距离范围 [0, 2]，0表示完全相似，2表示完全不相似
+                    # 设置阈值为 0.8，超过这个距离的记忆会被过滤
+                    if distance > 0.8:
+                        continue
+
                     memory = {
                         'id': results['ids'][0][i],
                         'document': results['documents'][0][i],
                         'metadata': results['metadatas'][0][i],
-                        'distance': results['distances'][0][i] if 'distances' in results else 0.0
+                        'distance': distance
                     }
                     memories.append(memory)
+
+                    # 只返回 top_k 条
+                    if len(memories) >= top_k:
+                        break
 
             return memories
 
         except Exception as e:
             print(f"[记忆系统] 检索失败: {e}")
+            # 检查是否是集合不存在的错误
+            if "does not exist" in str(e):
+                # 重新初始化集合
+                if self._reinitialize_collection():
+                    print("[记忆系统] 集合已重新初始化，再次尝试检索")
+                    # 再次尝试检索
+                    try:
+                        results = self.collection.query(
+                            query_embeddings=[query_embedding],
+                            n_results=top_k * 2,
+                            where=where_filter
+                        )
+                        memories = []
+                        if results['ids'] and results['ids'][0]:
+                            for i in range(len(results['ids'][0])):
+                                distance = results['distances'][0][i] if 'distances' in results else 0.0
+                                if distance > 0.8:
+                                    continue
+                                memory = {
+                                    'id': results['ids'][0][i],
+                                    'document': results['documents'][0][i],
+                                    'metadata': results['metadatas'][0][i],
+                                    'distance': distance
+                                }
+                                memories.append(memory)
+                                if len(memories) >= top_k:
+                                    break
+                        return memories
+                    except Exception as e2:
+                        print(f"[记忆系统] 重新检索失败: {e2}")
             return []
 
     def get_recent_memories(self, limit: int = 5) -> List[Dict]:
@@ -440,19 +638,45 @@ class VectorMemory:
                 limit=limit
             )
 
-            # 按时间戳排序
+            # 按时间戳排序并分类
             memories = []
+            main_memories = {}  # 按主记忆ID分组
+
             if results['ids']:
                 for i in range(len(results['ids'])):
+                    memory_type = results['metadatas'][i].get('type', 'unknown')
+                    memory_id = results['ids'][i]
+                    timestamp = results['metadatas'][i].get('timestamp', 0)
+
                     memory = {
-                        'id': results['ids'][i],
+                        'id': memory_id,
                         'document': results['documents'][i],
-                        'metadata': results['metadatas'][i]
+                        'metadata': results['metadatas'][i],
+                        'type': memory_type
                     }
-                    memories.append(memory)
+
+                    # 按主记忆ID分组（将用户输入和VLM分析历史关联到主记忆）
+                    related_id = results['metadatas'][i].get('related_analysis_id', '')
+                    if memory_type == 'monitoring':
+                        # 主记忆
+                        main_memories[memory_id] = {
+                            'main': memory,
+                            'user_inputs': [],
+                            'vlm_analyses': []
+                        }
+                    elif memory_type == 'user_input' and related_id in main_memories:
+                        # 用户输入
+                        main_memories[related_id]['user_inputs'].append(memory)
+                    elif memory_type == 'vlm_analysis' and related_id in main_memories:
+                        # VLM分析历史
+                        main_memories[related_id]['vlm_analyses'].append(memory)
+
+                # 将分组后的记忆转换为列表
+                for memory_group in main_memories.values():
+                    memories.append(memory_group)
 
                 # 按timestamp降序排序
-                memories.sort(key=lambda x: x['metadata'].get('timestamp', 0), reverse=True)
+                memories.sort(key=lambda x: x['main']['metadata'].get('timestamp', 0), reverse=True)
 
                 return memories[:limit]
 
@@ -460,6 +684,11 @@ class VectorMemory:
 
         except Exception as e:
             print(f"[记忆系统] 获取最近记忆失败: {e}")
+            # 检查是否是集合不存在的错误
+            if "does not exist" in str(e):
+                # 重新初始化集合
+                if self._reinitialize_collection():
+                    print("[记忆系统] 集合已重新初始化，返回空记忆列表")
             return []
 
     def format_memories_for_context(self, memories: List[Dict], max_count: int = 3) -> str:

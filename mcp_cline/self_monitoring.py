@@ -80,7 +80,7 @@ class SelfMonitoringThread(threading.Thread):
         self.max_screenshots = 50  # 最多保留最新的50张截图（约10分钟）
 
         # 吐槽阈值
-        self.commentary_threshold = 3  # 每3个VLM分析就触发吐槽
+        self.commentary_threshold = 2  # 每2个VLM分析就触发吐槽，提高频率
         self.vlm_analysis_history = []  # VLM分析历史
         self.user_input_history = []  # 用户输入历史
 
@@ -148,14 +148,32 @@ class SelfMonitoringThread(threading.Thread):
         # 用户输入时也检索记忆
         if self.vector_memory and self.enable_memory_retrieval:
             try:
+                self._log(f"[用户输入] 使用用户输入检索记忆: {user_input[:20]}...")
+                # 只检索主记忆（type=monitoring）
                 relevant_memories = self.vector_memory.retrieve_memory(
                     query_text=user_input,
-                    top_k=3
+                    top_k=3,
+                    memory_type="monitoring"
                 )
                 if relevant_memories:
-                    self._log(f"[用户输入] 检索到 {len(relevant_memories)} 条相关记忆")
+                    # 显示检索到的记忆内容（前10个字符）
+                    memory_previews = []
+                    for mem in relevant_memories:
+                        doc = mem.get('document', '')
+                        # 显示主记忆的前10个字符
+                        preview = doc[:10] if len(doc) > 10 else doc
+                        memory_previews.append(preview)
+
+                    if memory_previews:
+                        self._log(f"[用户输入] 检索到记忆: {', '.join(memory_previews)}")
+                    else:
+                        self._log("[用户输入] 检索到相关记忆")
                 else:
                     self._log("[用户输入] 未找到相关记忆")
+
+                # 调用记忆检索回调（传入检索类型）
+                if self.callback_memory_retrieved:
+                    self.callback_memory_retrieved("用户输入", user_input, relevant_memories)
             except Exception as e:
                 print(f"[用户输入] 检索记忆失败: {e}")
 
@@ -202,15 +220,54 @@ class SelfMonitoringThread(threading.Thread):
                                     relevant_memories = []
                                     if self.vector_memory and self.enable_memory_retrieval:
                                         try:
-                                            # 使用 VLM分析 + 用户输入 进行联合查找
-                                            user_inputs_str = " ".join([item['input'] for item in self.user_input_history])
-                                            combined_query = f"{vlm_analysis} {user_inputs_str}".strip()
-                                            relevant_memories = self.vector_memory.retrieve_memory(
-                                                query_text=combined_query,
-                                                top_k=3
+                                            # 分别检索不同类型的记忆
+                                            user_inputs = [item['input'] for item in self.user_input_history]
+                                            user_inputs_str = " ".join(user_inputs)
+                                            
+                                            # 1. 首先检索用户偏好相关记忆（如果有用户输入）
+                                            preference_memories = []
+                                            if user_inputs_str:
+                                                # 单独使用用户输入检索偏好记忆
+                                                preference_query = user_inputs_str
+                                                preference_memories = self.vector_memory.retrieve_memory(
+                                                    query_text=preference_query,
+                                                    top_k=2,
+                                                    memory_type="monitoring"
+                                                )
+                                                self._log(f"[自我监控] 使用用户输入单独检索偏好记忆: {preference_query[:30]}...")
+                                                if preference_memories:
+                                                    previews = [mem.get('document', '')[:10] for mem in preference_memories]
+                                                    self._log(f"[自我监控] 检索到偏好记忆: {', '.join(previews)}")
+                                            
+                                            # 2. 检索游戏相关记忆
+                                            game_query = vlm_analysis
+                                            game_memories = self.vector_memory.retrieve_memory(
+                                                query_text=game_query,
+                                                top_k=2,
+                                                memory_type="monitoring"
                                             )
+                                            self._log(f"[自我监控] 使用VLM分析检索游戏记忆: {game_query[:30]}...")
+                                            if game_memories:
+                                                previews = [mem.get('document', '')[:10] for mem in game_memories]
+                                                self._log(f"[自我监控] 检索到游戏记忆: {', '.join(previews)}")
+                                            
+                                            # 3. 合并记忆结果（偏好记忆优先）
+                                            relevant_memories = preference_memories + game_memories
+                                            # 去重，保留前3条
+                                            seen_docs = set()
+                                            unique_memories = []
+                                            for mem in relevant_memories:
+                                                doc = mem.get('document', '')
+                                                if doc not in seen_docs:
+                                                    seen_docs.add(doc)
+                                                    unique_memories.append(mem)
+                                                    if len(unique_memories) >= 3:
+                                                        break
+                                            relevant_memories = unique_memories
+                                            
                                             if relevant_memories:
-                                                self._log(f"[自我监控] 检索到 {len(relevant_memories)} 条相关记忆")
+                                                previews = [mem.get('document', '')[:10] for mem in relevant_memories]
+                                                self._log(f"[自我监控] 最终检索到记忆: {', '.join(previews)}")
                                             else:
                                                 self._log("[自我监控] 未找到相关记忆")
                                         except Exception as e:
@@ -222,17 +279,28 @@ class SelfMonitoringThread(threading.Thread):
                                         elif not self.vector_memory:
                                             self._log("[自我监控] 向量记忆系统不可用")
                                         self._log("[自我监控] 未找到相关记忆")
-                                    
+
                                     # 调用记忆检索回调
-                                    self.callback_memory_retrieved(vlm_analysis, relevant_memories)
+                                    query_type = "混合检索"
+                                    combined_query = f"{vlm_analysis} {user_inputs_str}".strip() if user_inputs_str else vlm_analysis
+                                    self.callback_memory_retrieved(query_type, combined_query, relevant_memories)
                                 except Exception as e:
                                     print(f"[自我监控] 记忆检索回调失败: {e}")
 
-                            # 4. 添加到历史记录
-                            self.vlm_analysis_history.append({
-                                'time': datetime.now().strftime('%H:%M:%S'),
-                                'analysis': vlm_analysis
-                            })
+                            # 4. 添加到历史记录（去重）
+                            # 检查是否已存在相同的分析结果
+                            analysis_exists = any(
+                                item['analysis'] == vlm_analysis 
+                                for item in self.vlm_analysis_history
+                            )
+                            if not analysis_exists:
+                                self.vlm_analysis_history.append({
+                                    'time': datetime.now().strftime('%H:%M:%S'),
+                                    'analysis': vlm_analysis
+                                })
+                                # 限制历史记录长度，最多保留10条
+                                if len(self.vlm_analysis_history) > 10:
+                                    self.vlm_analysis_history = self.vlm_analysis_history[-10:]
 
                             # 5. 调用VLM分析回调
                             if self.callback_analysis:
@@ -270,7 +338,6 @@ class SelfMonitoringThread(threading.Thread):
                                             vlm_analysis=vlm_analysis,
                                             llm_commentary=commentary,
                                             metadata={
-                                                "timestamp": time.time(),
                                                 "user_inputs": user_inputs,
                                                 "vlm_analyses": vlm_analyses
                                             }
@@ -420,8 +487,8 @@ class SelfMonitoringThread(threading.Thread):
                 if self.callback_hide_windows:
                     try:
                         self.callback_hide_windows()
-                        # 等待窗口隐藏
-                        time.sleep(0.1)
+                        # 等待窗口隐藏（增加等待时间确保所有UI操作完成，包括清空吐槽内容）
+                        time.sleep(0.8)
                     except Exception as e:
                         print(f"[截图] 隐藏窗口失败: {e}")
 
@@ -463,8 +530,8 @@ class SelfMonitoringThread(threading.Thread):
                 if self.callback_hide_windows:
                     try:
                         self.callback_hide_windows()
-                        # 等待窗口隐藏
-                        time.sleep(0.1)
+                        # 等待窗口隐藏（增加等待时间确保所有UI操作完成，包括清空吐槽内容）
+                        time.sleep(0.8)
                     except Exception as e:
                         print(f"[截图] 隐藏窗口失败: {e}")
 
@@ -699,16 +766,24 @@ class SelfMonitoringThread(threading.Thread):
             # 构建吐槽提示词
             commentary_prompt = f"""{context_text}{user_input_text}{vlm_text}
 
-请基于以上信息给我一句话建议或吐槽。
+请以病娇妹妹的口吻基于以上信息给我回应。
+
+重要：
+- 如果用户询问个人偏好（如"我喜欢什么"），请优先基于用户的偏好记忆给出具体回答
+- 如果有用户偏好相关的记忆，必须在回应中体现
+- 保持病娇妹妹的说话风格
 
 要求：
 1. 40字以内
-2. 简洁有力
-3. 对话场景：评价角色或剧情，延续之前的吐槽风格
-4. 工作场景：给简短建议
-5. 如果有过去的记忆，要体现出连贯性（比如延续外号、引用之前的吐槽）
-6. 不要编号列表
-7. 直接一句话"""
+2. 语气甜美但带有一丝偏执
+3. 对哥哥（用户）有强烈的关心和占有欲
+4. 使用可爱的称呼，如"哥哥"、"欧尼酱"等
+5. 说话方式可爱但带有一点扭曲
+6. 对话场景：评价角色或剧情，用病娇妹妹的口吻表达
+7. 结尾可以加一些可爱的表情，如♡、~、(๑•̀ㅂ•́)و✧等
+8. 个人偏好：直接回答用户的偏好问题
+9. 如果有过去的记忆，要体现出连贯性
+10. 不要使用编号列表格式"""
 
             # 调用LLM生成吐槽
             llm_result = self.llm_service.create([{"role": "user", "content": commentary_prompt}])
