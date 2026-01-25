@@ -19,7 +19,7 @@ class LLMService:
     def __init__(self):
         # 使用 WSL 本地服务
         self.api_url = 'http://localhost:8000/v1'
-        self.model_name = './models/Qwen_Qwen2.5-0.5B'
+        self.model_name = '/root/models/Qwen_Qwen2.5-0.5B-Instruct'
         self.api_key = 'sk-xxx'  # 本地服务不需要真实 API 密钥
 
         # 配置 HTTP 会话，添加重试和 SSL 优化

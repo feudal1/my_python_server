@@ -18,176 +18,16 @@ import hashlib
 import sys
 import os
 from PIL import Image
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # 使用非交互式后端，避免GUI问题
+
+# 设置中文字体支持
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体字
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 from control_api_tool import ImprovedMovementController  # 导入移动控制器
 
-# 导入Qt库
-try:
-    from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton
-    from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QFont, QColor
-    from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-    QT_AVAILABLE = True
-except ImportError:
-    QT_AVAILABLE = False
-    print("PyQt5 not available. Visualization will be disabled.")
-
-class Visualizer:
-    """
-    Qt可视化类
-    """
-    def __init__(self, env):
-        if not QT_AVAILABLE:
-            return
-            
-        self.app = QApplication.instance()
-        if self.app is None:
-            self.app = QApplication([])
-        
-        self.window = YOLOVisualizerWindow(env)
-        self.env = env
-        self.running = False
-        
-    def start(self):
-        if not QT_AVAILABLE:
-            print("Qt not available. Cannot start visualization.")
-            return
-        self.running = True
-        self.window.show()
-        self.app.exec_()
-        
-    def stop(self):
-        if not QT_AVAILABLE:
-            return
-        self.running = False
-        self.window.close()
-
-class YOLOVisualizerWindow(QMainWindow):
-    """
-    YOLO检测结果可视化窗口
-    """
-    def __init__(self, env):
-        super().__init__()
-        self.env = env
-        self.setWindowTitle("YOLO Detection Visualization")
-        self.setGeometry(100, 100, 800, 600)
-        
-        # 创建中央部件
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # 创建布局
-        layout = QVBoxLayout(central_widget)
-        
-        # 创建图像显示组件
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.image_label)
-        
-        # 创建控制按钮
-        self.control_button = QPushButton("Start/Stop Detection Display")
-        self.control_button.clicked.connect(self.toggle_detection_display)
-        layout.addWidget(self.control_button)
-        
-        # 设置透明背景
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        
-        # 定时器更新图像
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_frame)
-        self.detection_display_active = False
-        
-        # 初始化显示
-        self.blank_image = np.zeros((CONFIG['IMAGE_HEIGHT'], CONFIG['IMAGE_WIDTH'], 3), dtype=np.uint8)
-        self.display_image = self.blank_image.copy()
-        self.update_display()
-        
-    def toggle_detection_display(self):
-        """
-        切换检测显示状态
-        """
-        self.detection_display_active = not self.detection_display_active
-        if self.detection_display_active:
-            self.timer.start(50)  # 每50ms更新一次，约20FPS
-            self.control_button.setText("Stop Detection Display")
-        else:
-            self.timer.stop()
-            self.control_button.setText("Start Detection Display")
-    
-    def update_frame(self):
-        """
-        更新当前帧
-        """
-        # 获取当前屏幕截图
-        current_image = self.env.capture_screen()
-        
-        # 运行YOLO检测
-        detections = self.env.detect_target(current_image)
-        
-        # 更新显示
-        self.display_image_with_detections(current_image, detections)
-    
-    def display_image_with_detections(self, image, detections):
-        """
-        在图像上绘制检测结果并显示
-        """
-        # 将OpenCV BGR图像转换为RGB
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        # 创建QImage
-        h, w, ch = rgb_image.shape
-        bytes_per_line = ch * w
-        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        
-        # 创建QPixmap
-        pixmap = QPixmap.fromImage(qt_image)
-        
-        # 创建画家对象绘制检测框
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # 设置画笔和字体
-        red_pen = QPen(Qt.red, 2)
-        font = QFont('Arial', 10, QFont.Bold)
-        painter.setPen(red_pen)
-        painter.setFont(font)
-        
-        # 绘制检测框和标签
-        for detection in detections:
-            bbox = detection['bbox']  # [x1, y1, x2, y2]
-            label = detection['label']
-            score = detection['score']
-            
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-            
-            # 绘制边界框
-            painter.drawRect(x1, y1, x2-x1, y2-y1)
-            
-            # 绘制标签和置信度
-            text = f"{label}: {score:.2f}"
-            text_rect = painter.boundingRect(x1, y1-20, 100, 20, Qt.AlignLeft, text)
-            # 创建半透明黑色背景
-            painter.fillRect(text_rect, QColor(0, 0, 0, 180))  # 透明度180/255
-            painter.setPen(Qt.white)
-            painter.drawText(text_rect, Qt.AlignCenter, text)
-            painter.setPen(red_pen)  # 重置画笔颜色
-        
-        painter.end()
-        
-        # 设置pixmap到标签
-        self.image_label.setPixmap(pixmap.scaled(
-            self.image_label.width(), 
-            self.image_label.height(),
-            Qt.KeepAspectRatio
-        ))
-    
-    def update_display(self):
-        """
-        更新显示
-        """
-        h, w, ch = self.blank_image.shape
-        bytes_per_line = ch * w
-        qt_image = QImage(self.blank_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qt_image)
-        self.image_label.setPixmap(pixmap)
+# 可视化功能已禁用
 
 # 配置日志
 def setup_logging():
@@ -228,13 +68,14 @@ def setup_logging():
 CONFIG = {
     'IMAGE_WIDTH': 640,
     'IMAGE_HEIGHT': 480,
-    'ENV_MAX_STEPS': 50,
+    
+    'ENV_MAX_STEPS': 20,
     'LEARNING_RATE': 0.001,  # 提高学习率
     'GAMMA': 0.99,
     'K_EPOCHS': 10,  # 增加更新轮数
     'EPS_CLIP': 0.2,
     'TARGET_DESCRIPTION': 'gate',
-    'DETECTION_CONFIDENCE': 0.4,
+    'DETECTION_CONFIDENCE': 0.75,  # 修改：提高检测置信度到0.9
     'MIN_GATE_AREA': 10000,
     'CENTER_THRESHOLD': 0.1,
     'BASE_COMPLETION_REWARD': 250,
@@ -416,7 +257,7 @@ class TargetSearchEnvironment:
             return []
 
         try:
-            conf_threshold = CONFIG.get('DETECTION_CONFIDENCE', 0.4)
+            conf_threshold = CONFIG.get('DETECTION_CONFIDENCE', 0.9)  # 修改：默认值改为0.9
             self.logger.debug(f"YOLO检测开始，置信度阈值: {conf_threshold}")
 
             results = self.yolo_model.predict(
@@ -483,63 +324,50 @@ class TargetSearchEnvironment:
         # 如果有多个climb检测，要求至少一个置信度超过阈值
         return any(detection['score'] >= confidence_threshold for detection in climb_detections)
 
-    def calculate_reward(self, detection_results, last_area, action_taken):
+    def calculate_reward(self, detection_results, last_area, move_action, turn_action):
         """
-        计算综合奖励 - 只考虑转头动作的影响
+        计算综合奖励 - 简化版
+        包含：时间惩罚、门检测奖励（看到门就给2分）、前进奖励和完成奖励
         """
         # 获取当前最大检测面积
         current_area = self._get_max_detection_area(detection_results) if detection_results else 0
 
-        # 奖励权重
-        REWARD_WEIGHT = 300.0  # 靠近/远离奖励权重
-        STEP_PENALTY = 20.0   # 步数惩罚
-        SUCCESS_REWARD = 500.0 # 成功奖励
-        CENTER_REWARD = 10.0   # 朝向中心奖励
+        # 奖励参数
+        STEP_PENALTY = -1.0     # 时间惩罚：-1分/步
+        SUCCESS_REWARD = 500.0  # 完成奖励
+        GATE_REWARD = 2.0       # 看到门就给2分
+        FORWARD_REWARD = 2.0     # 前进动作奖励
+        STAY_PENALTY = -1.0      # 不动动作惩罚
 
-        # 检查是否是转头动作
-        turn_action = action_taken
-        is_turn_only = True  # 现在所有动作都是转头动作
+        # 1. 时间惩罚
+        step_penalty = STEP_PENALTY
 
-        # 1. 距离变化奖励 - 基于面积变化
-        if is_turn_only:
-            # 转头动作：面积变化是正常的，但仍给予奖励
-            if current_area > last_area:
-                # 靠近目标 - 奖励
-                area_ratio = (current_area - last_area) / (CONFIG['IMAGE_WIDTH'] * CONFIG['IMAGE_HEIGHT'])
-                distance_reward = REWARD_WEIGHT * area_ratio * 100
-            elif current_area < last_area:
-                # 远离目标 - 惩罚
-                area_ratio = (last_area - current_area) / (CONFIG['IMAGE_WIDTH'] * CONFIG['IMAGE_HEIGHT'])
-                distance_reward = -REWARD_WEIGHT * area_ratio * 100
+        # 2. 移动动作奖励
+        move_reward = FORWARD_REWARD if move_action == 0 else STAY_PENALTY
+
+        # 3. 门检测奖励 - 看到门就给2分
+        gate_reward = 0.0
+        success_bonus = 0.0
+        
+        # 检查YOLO检测是否成功
+        if detection_results:
+            # 检查是否检测到门
+            gate_detected = any(detection['label'].lower() == 'gate' or 'gate' in detection['label'].lower() for detection in detection_results)
+            
+            # 看到门就给2分
+            if gate_detected:
+                gate_reward = GATE_REWARD
+                self.logger.info(f"检测到门，奖励: {gate_reward:.2f}")
             else:
-                # 面积不变
-                distance_reward = -15.0
-        else:
-            distance_reward = 0.0
+                gate_reward = 0.0
 
-        # 2. 朝向中心奖励
-        center_reward = self._calculate_center_reward(detection_results, CENTER_REWARD)
+            # 4. 完成奖励
+            if self._check_climb_conditions(detection_results):
+                success_bonus = SUCCESS_REWARD
 
-        # 3. 目标存在奖励
-        if current_area > 0:
-            area_ratio = current_area / (CONFIG['IMAGE_WIDTH'] * CONFIG['IMAGE_HEIGHT'])
-            target_presence_reward = 20.0 * area_ratio
-        else:
-            target_presence_reward = -5.0
-
-        # 4. 步数惩罚
-        step_penalty = -STEP_PENALTY
-
-        # 5. 重复动作惩罚
-        repetition_penalty = self._calculate_repetition_penalty(turn_action)
-
-        # 6. 成功奖励
-        if self._check_climb_conditions(detection_results):
-            success_bonus = SUCCESS_REWARD
-        else:
-            success_bonus = 0.0
-
-        total_reward = distance_reward + center_reward + target_presence_reward + step_penalty + repetition_penalty + success_bonus
+        # 计算总奖励
+        total_reward = step_penalty + move_reward + gate_reward + success_bonus
+        self.logger.info(f"奖励分解 - 时间: {step_penalty:.2f}, 门: {gate_reward:.2f}, 完成: {success_bonus:.2f}, 总计: {total_reward:.2f}")
 
         return total_reward, current_area
 
@@ -622,14 +450,15 @@ class TargetSearchEnvironment:
             return 0
         return max([det['width'] * det['height'] for det in detection_results])
 
-    def step(self, turn_action, turn_angle=30):
+    def step(self, move_action, turn_action, move_duration=0.5, turn_angle=30):
         """
         执行动作并返回新的状态、奖励和是否结束
-        现在只执行转头动作，不执行移动动作
+        执行移动动作和转头动作
         """
-        turn_action_names = ["turn_left", "turn_right"]
+        move_action_names = ["前进", "不动"]
+        turn_action_names = ["左转", "右转"]
         
-        self.logger.debug(f"执行动作: 转头-{turn_action_names[turn_action]}, 角度: {turn_angle}")
+        self.logger.debug(f"执行动作: 移动-{move_action_names[move_action]}, 转头-{turn_action_names[turn_action]}, 移动时间: {abs(move_duration)}, 转头角度: {turn_angle}")
         
         # 执行动作前先检查当前状态
         pre_action_state = self.capture_screen()
@@ -643,10 +472,15 @@ class TargetSearchEnvironment:
             self.reset_to_origin()
             return pre_action_state, 0, True, pre_action_detections
 
-        # 只执行转头动作，移除移动动作
-        if turn_action == 0:  # turn_left
+        # 执行移动动作
+        if move_action == 0:  # 前进
+            self.movement_controller.move_forward(duration=abs(move_duration))
+        # 移动动作1: 不动，不执行任何操作
+
+        # 执行转头动作
+        if turn_action == 0:  # 左转
             self.movement_controller.turn_left(angle=turn_angle)
-        elif turn_action == 1:  # turn_right
+        elif turn_action == 1:  # 右转
             self.movement_controller.turn_right(angle=turn_angle)
 
         # 获取新状态
@@ -657,7 +491,7 @@ class TargetSearchEnvironment:
         climb_detected = self._check_climb_conditions(detection_results)
         
         # 计算奖励
-        reward, new_area = self.calculate_reward(detection_results, self.last_area, turn_action)
+        reward, new_area = self.calculate_reward(detection_results, self.last_area, move_action, turn_action)
         
         # 更新步数
         self.step_count += 1
@@ -759,20 +593,9 @@ class TargetSearchEnvironment:
 
     def start_visualizer(self):
         """
-        启动可视化
+        启动可视化（已禁用）
         """
-        if not QT_AVAILABLE:
-            print("Qt not available. Cannot start visualization.")
-            return
-            
-        if self.visualizer is None:
-            self.visualizer = Visualizer(self)
-        
-        if self.visualizer_thread is None:
-            self.visualizer_thread = threading.Thread(target=self.visualizer.start, daemon=True)
-            self.visualizer_thread.start()
-        else:
-            self.visualizer.start()
+        print("Visualization is disabled.")
 
 class PolicyNetwork(nn.Module):
     """
@@ -804,13 +627,19 @@ class PolicyNetwork(nn.Module):
         self.fc_shared = nn.Sequential(
             nn.Linear(256, 512),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Dropout(0.2)
+            nn.Dropout(0.3)
         )
 
-        # 转头动作策略头（移动动作固定为不移动）
+        # 添加GRU层 - 处理序列数据，捕捉时间依赖关系
+        self.gru = nn.GRU(
+            input_size=512,  # 输入特征维度
+            hidden_size=512,  # 隐藏状态维度
+            num_layers=1,     # GRU层数
+            batch_first=True, # 批处理维度在前
+            dropout=0.2       # Dropout率
+        )
+
+        # 转头动作策略头
         self.turn_policy = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
@@ -824,7 +653,7 @@ class PolicyNetwork(nn.Module):
             nn.Linear(256, 1)
         )
 
-    def forward(self, x):
+    def forward(self, x, h=None):
         # 归一化输入
         x = x / 255.0
 
@@ -842,15 +671,32 @@ class PolicyNetwork(nn.Module):
         conv_features = conv_features.view(conv_features.size(0), -1)  # 展平 (B, 256)
         shared_features = self.fc_shared(conv_features)  # 共享全连接层处理
 
-        # 移动动作固定为不移动
-        batch_size = x.size(0)
-        move_probs = torch.ones(batch_size, 1)  # 不移动概率为1
-        turn_logits = self.turn_policy(shared_features)      # 转头动作logits
-        state_values = self.value_head(shared_features)     # 状态价值
+        # 添加序列维度，适应GRU输入格式 (B, T, C)
+        # 这里T=1，因为每次只处理一个时间步
+        gru_input = shared_features.unsqueeze(1)  # (B, 1, 512)
+
+        # GRU前向传播
+        gru_out, h_n = self.gru(gru_input, h)  # gru_out: (B, 1, 512), h_n: (1, B, 512)
+        gru_out = gru_out.squeeze(1)  # 移除时间维度 (B, 512)
+
+        # 转头动作策略头
+        turn_logits = self.turn_policy(gru_out)      # 转头动作logits
+        state_values = self.value_head(gru_out)     # 状态价值
 
         turn_probs = torch.softmax(turn_logits, dim=-1)
 
-        return move_probs, turn_probs, state_values
+        # 打印神经网络最后一层的值（保留两位小数）
+        turn_probs_np = turn_probs.detach().cpu().numpy().tolist()
+        state_values_np = state_values.detach().cpu().numpy().tolist()
+        
+        # 保留两位小数
+        turn_probs_rounded = [[round(val, 2) for val in sublist] for sublist in turn_probs_np]
+        state_values_rounded = [[round(val, 2) for val in sublist] for sublist in state_values_np]
+        
+        print(f"[神经网络最后一层] 转头动作概率: {turn_probs_rounded}")
+        print(f"[神经网络最后一层] 状态价值: {state_values_rounded}")
+
+        return turn_probs, state_values, h_n
 
 class PPOAgent:
     """
@@ -877,10 +723,11 @@ class PPOAgent:
         self.gradient_norms = []
         self.parameter_norms = []
         self.loss_history = []
+        self.reward_history = []  # 记录每个episode的总奖励
 
     def select_action(self, state, memory, return_debug_info=False):
         """
-        选择动作 - 只选择转头动作
+        选择动作 - 只选择转头动作，默认前进
         """
         # 确保输入状态的形状正确
         if len(state.shape) == 3:  # (H, W, C)
@@ -896,8 +743,13 @@ class PPOAgent:
                           f"范围: [{state_tensor.min().item():.0f}, {state_tensor.max().item():.0f}]")
             self._debug_printed = True
 
+        # 初始化GRU隐藏状态（如果不存在）
+        if not hasattr(self, 'gru_hidden'):
+            # 创建初始隐藏状态 (num_layers, batch_size, hidden_size)
+            self.gru_hidden = torch.zeros(1, 1, 512)
+
         with torch.no_grad():
-            move_probs, turn_probs, state_values = self.policy_old(state_tensor)
+            turn_probs, state_values, self.gru_hidden = self.policy_old(state_tensor, self.gru_hidden)
 
             # 转头动作概率
             turn_probs_np = turn_probs.squeeze().cpu().numpy()
@@ -905,24 +757,27 @@ class PPOAgent:
 
             turn_max_idx = np.argmax(turn_probs_np)
 
-            # 从策略分布中采样转头动作
+            # 固定移动动作：默认前进
+            move_action = 0  # 固定为前进动作
+            
+            # 转头动作：从策略分布中采样动作
             turn_dist = torch.distributions.Categorical(turn_probs)
             turn_action = turn_dist.sample()
-
-            # 计算对数概率
-            logprob = turn_dist.log_prob(turn_action)
+            turn_logprob = turn_dist.log_prob(turn_action)
+            logprob = turn_logprob  # 只计算转头动作的对数概率
 
             # 只在前10步打印详细信息，后面简化输出
             if len(memory.rewards) < 10:
-                entropy = turn_dist.entropy().mean()
+                turn_entropy = turn_dist.entropy().mean()
                 self.logger.info(f"[网络] 转头: [{turn_probs_np[0]:.3f} {turn_probs_np[1]:.3f}] 价值: {value_np:.3f} | "
                                f"最佳: 转头-{turn_max_idx} | "
                                f"输入均值: {getattr(self.policy_old, 'input_mean', 0):.3f}, "
                                f"卷积均值: {getattr(self.policy_old, 'conv_mean', 0):.3f}")
-                self.logger.info(f"[探索] 转头熵: {turn_dist.entropy().mean():.4f}, 总熵: {entropy:.4f}")
+                self.logger.info(f"[探索] 转头熵: {turn_entropy:.4f}")
 
-        # 固定动作参数
-        move_forward_step = 0  # 不移动
+        # 动作参数
+        # 默认前进，固定前进时间为0.5秒
+        move_duration = 0.5  # 固定前进时间
         turn_angle = 30
 
         # 存储到记忆中
@@ -932,16 +787,17 @@ class PPOAgent:
             logprob.item(),
             0,
             False,
-            [move_forward_step, turn_angle]
+            [move_duration, turn_angle, move_action]
         )
 
         if return_debug_info:
-            return turn_action.item(), move_forward_step, turn_angle, {
+            return move_action, turn_action.item(), move_duration, turn_angle, {
                 'turn_probs': turn_probs.cpu().numpy(),
-                'value': state_values
+                'value': state_values,
+                'gru_hidden': self.gru_hidden.cpu().numpy()
             }
 
-        return turn_action.item(), move_forward_step, turn_angle
+        return move_action, turn_action.item(), move_duration, turn_angle
 
     def update(self, memory):
         """
@@ -969,8 +825,11 @@ class PPOAgent:
 
         # PPO更新
         for _ in range(self.K_epochs):
+            # 初始化GRU隐藏状态
+            gru_hidden = torch.zeros(1, old_states.size(0), 512)
+
             # 前向传播
-            move_probs, turn_probs, state_values = self.policy(old_states)
+            turn_probs, state_values, _ = self.policy(old_states, gru_hidden)
 
             # 创建分布
             turn_dist = torch.distributions.Categorical(turn_probs)
@@ -1245,30 +1104,38 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
             ppo_agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print(f"从主模型加载: {model_path}, 从第 0 轮开始")
     
+    # 创建目录用于保存训练效果图片
+    training_plots_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training_plots")
+    if not os.path.exists(training_plots_dir):
+        os.makedirs(training_plots_dir)
+
     # 训练循环 - 使用正确的训练流程
+    episode_rewards = []  # 记录每个episode的总奖励
+    combined_memory = Memory()  # 用于累积5个episode的经验
+    
     for episode in range(start_episode, 2001):
         print(f"\n=== Episode {episode} Started ===")
         ppo_agent.logger.info(f"=== Episode {episode} Started ===")
 
         state = env.reset()
-        memory = Memory()
+        episode_memory = Memory()
         total_reward = 0
 
         for t in range(env.max_steps):
-            # 智能体选择动作（只选择转头动作）
-            turn_action, move_step, turn_angle = ppo_agent.select_action(
-                state, memory
+            # 智能体选择动作（选择移动动作和转头动作）
+            move_action, turn_action, move_duration, turn_angle = ppo_agent.select_action(
+                state, episode_memory
             )
 
-            # 执行环境步骤（只传入转头动作）
+            # 执行环境步骤（传入移动动作和转头动作）
             next_state, reward, done, detections = env.step(
-                turn_action, turn_angle
+                move_action, turn_action, move_duration, turn_angle
             )
 
             # 更新记忆中的奖励和终端状态
-            if len(memory.rewards) > 0:
-                memory.rewards[-1] = reward
-                memory.is_terminals[-1] = done
+            if len(episode_memory.rewards) > 0:
+                episode_memory.rewards[-1] = reward
+                episode_memory.is_terminals[-1] = done
 
             total_reward += reward
             state = next_state
@@ -1276,11 +1143,28 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
             if done:
                 break
 
-        # 每个episode都更新策略（不只是每5轮）
-        if len(memory.rewards) > 0:
-            ppo_agent.update(memory)
-            print(f"Episode {episode}: 策略已更新")
-            ppo_agent.logger.info(f"Episode {episode}: 策略已更新")
+        # 记录奖励
+        episode_rewards.append(total_reward)
+        ppo_agent.reward_history.append(total_reward)
+
+        # 将当前episode的经验添加到累积记忆中
+        for i in range(len(episode_memory.states)):
+            combined_memory.append(
+                episode_memory.states[i],
+                episode_memory.turn_actions[i],
+                episode_memory.logprobs[i],
+                episode_memory.rewards[i],
+                episode_memory.is_terminals[i],
+                episode_memory.action_params[i] if i < len(episode_memory.action_params) else None
+            )
+
+        # 每2轮更新一次策略
+        if (episode + 1) % 2 == 0:
+            if len(combined_memory.rewards) > 0:
+                ppo_agent.update(combined_memory)
+                print(f"Episode {episode}: 每2轮策略更新完成")
+                ppo_agent.logger.info(f"Episode {episode}: 每2轮策略更新完成")
+                combined_memory.clear_memory()  # 清空记忆，准备下一轮
 
         # 记录训练信息
         print(f"Episode {episode}, Total Reward: {total_reward:.2f}, Steps: {t+1}")
@@ -1290,6 +1174,73 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
         if (episode + 1) % 10 == 0:
             checkpoint_path = f'ppo_model_checkpoint_ep_{episode}.pth'
             ppo_agent.save_checkpoint(checkpoint_path)
+
+        # 每20轮生成并保存训练效果图片
+        if (episode + 1) % 20 == 0:
+            # 计算最近20轮的平均奖励
+            recent_rewards = episode_rewards[-20:] if len(episode_rewards) >= 20 else episode_rewards
+            avg_reward = np.mean(recent_rewards)
+            
+            print(f"\n=== 训练效果 (最近20轮) ===")
+            print(f"平均奖励: {avg_reward:.2f}")
+            print(f"最大奖励: {max(recent_rewards):.2f}")
+            print(f"最小奖励: {min(recent_rewards):.2f}")
+            
+            # 生成训练效果图表
+            plt.figure(figsize=(12, 6))
+            
+            # 图表1: 训练损失
+            plt.subplot(1, 2, 1)
+            if len(ppo_agent.loss_history) > 0:
+                # 平滑损失曲线（使用移动平均）
+                if len(ppo_agent.loss_history) >= 10:
+                    smoothed_loss = np.convolve(ppo_agent.loss_history, np.ones(10)/10, mode='valid')
+                    plt.plot(range(10, len(ppo_agent.loss_history) + 1), smoothed_loss, label='平滑损失')
+                else:
+                    plt.plot(ppo_agent.loss_history, label='损失')
+                plt.title('训练损失')
+                plt.xlabel('更新次数')
+                plt.ylabel('损失值')
+                plt.grid(True)
+                plt.legend()
+            else:
+                plt.title('训练损失')
+                plt.xlabel('更新次数')
+                plt.ylabel('损失值')
+                plt.grid(True)
+                plt.text(0.5, 0.5, '暂无损失数据', ha='center', va='center', transform=plt.gca().transAxes)
+            
+            # 图表2: 平均奖励
+            plt.subplot(1, 2, 2)
+            if len(episode_rewards) > 0:
+                # 计算移动平均奖励
+                window_size = min(10, len(episode_rewards))
+                if len(episode_rewards) >= window_size:
+                    moving_avg_rewards = np.convolve(episode_rewards, np.ones(window_size)/window_size, mode='valid')
+                    plt.plot(range(window_size, len(episode_rewards) + 1), moving_avg_rewards, label=f'{window_size}轮移动平均')
+                plt.plot(episode_rewards, alpha=0.3, label='原始奖励')
+                plt.axhline(y=avg_reward, color='r', linestyle='--', label=f'最近20轮平均: {avg_reward:.2f}')
+                plt.title('训练奖励')
+                plt.xlabel('Episode')
+                plt.ylabel('总奖励')
+                plt.grid(True)
+                plt.legend()
+            else:
+                plt.title('训练奖励')
+                plt.xlabel('Episode')
+                plt.ylabel('总奖励')
+                plt.grid(True)
+                plt.text(0.5, 0.5, '暂无奖励数据', ha='center', va='center', transform=plt.gca().transAxes)
+            
+            plt.tight_layout()
+            
+            # 保存图表
+            plot_path = os.path.join(training_plots_dir, f'training_progress_ep_{episode}.png')
+            plt.savefig(plot_path)
+            plt.close()
+            
+            print(f"训练效果图表已保存: {plot_path}")
+            ppo_agent.logger.info(f"训练效果图表已保存: {plot_path}")
 
 def find_latest_checkpoint(model_path):
     """

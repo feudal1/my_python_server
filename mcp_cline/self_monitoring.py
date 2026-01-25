@@ -73,7 +73,7 @@ class SelfMonitoringThread(threading.Thread):
 
         # 监控参数
         self.monitor_interval = 5  # 每5秒执行一次监控周期
-        self.screenshots_per_cycle = 5  # 每个周期截图5张
+        self.screenshots_per_cycle = 2  # 每个周期截图2张
         self.screenshot_interval = 1  # 每张截图间隔1秒
 
         # 截图清理参数
