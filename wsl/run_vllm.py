@@ -2,16 +2,27 @@ import os
 import subprocess
 import signal
 import time
+import re
 from modelscope import snapshot_download
 
 # ======================
 # 配置模型
 # ======================
+
+# 添加路径净化函数
+def sanitize_model_path(model_name):
+    """净化模型名称，防止路径遍历攻击"""
+    # 移除路径分隔符和其他潜在危险字符
+    sanitized = re.sub(r'[\/\\:\*\?"<>\|]', '_', model_name)
+    # 确保不包含 '..' 序列
+    sanitized = re.sub(r'\.\.', '_', sanitized)
+    return sanitized
+
 LLM_MODEL = "OpenBMB/MiniCPM4-0.5B-QAT-Int4-GPTQ-format"
 VLM_MODEL = "OpenBMB/MiniCPM-V-2_6-int4"  # 或 MiniCPM-V-2_6（非量化）
 
-LLM_DIR = f"/root/models/{LLM_MODEL.replace('/', '_')}"
-VLM_DIR = f"/root/models/{VLM_MODEL.replace('/', '_')}"
+LLM_DIR = f"/root/my_python_server/models/{sanitize_model_path(LLM_MODEL)}"
+VLM_DIR = f"/root/my_python_server/models/{sanitize_model_path(VLM_MODEL)}"
 
 # 存储进程对象
 processes = []
@@ -60,24 +71,25 @@ if __name__ == "__main__":
     download_models()
     
     llm_cmd = (
-        f"python -m vllm.entrypoints.openai.api_server "
+        f"/root/my_python_server/vllm-env/bin/python -m vllm.entrypoints.openai.api_server "
         f"--model {LLM_DIR} "
         f"--host 0.0.0.0 --port 8000 "
         f"--quantization gptq_marlin "
         f"--trust-remote-code "
         f"--dtype bfloat16 "
-        f"--gpu-memory-utilization 0.8 "
-        f"--max-num-batched-tokens 32768"
+        f"--gpu-memory-utilization 0.1 "
+        f"--max-num-batched-tokens 512"
     )
     
     vlm_cmd = (
-        f"python -m vllm.entrypoints.openai.api_server "
+        f"/root/my_python_server/vllm-env/bin/python -m vllm.entrypoints.openai.api_server "
         f"--model {VLM_DIR} "
         f"--host 0.0.0.0 --port 8001 "
-        f"--dtype bfloat16 "                 # RTX 4060 更适合 float16
+        f"--dtype bfloat16 "
         f"--trust-remote-code "
-        f"--gpu-memory-utilization 0.5 "
-        f"--max-model-len 1024 "            # 进一步缩短
+        f"--gpu-memory-utilization 0.1 "
+        f"--max-model-len 512 "
+        f"--max-num-batched-tokens 512"
     )
     
     print("\n🌐 访问地址:")
