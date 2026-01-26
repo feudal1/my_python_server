@@ -20,7 +20,11 @@ import os
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')  # 使用非交互式后端，避免GUI问题
+matplotlib.use('TkAgg')  # 使用交互式后端，支持可视化窗口
+
+# 添加Captum库导入
+from captum.attr import IntegratedGradients, Saliency, LayerGradCam
+from captum.attr import visualization as viz
 
 # 设置中文字体支持
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体字
@@ -69,8 +73,8 @@ CONFIG = {
     'IMAGE_WIDTH': 640,
     'IMAGE_HEIGHT': 480,
     
-    'ENV_MAX_STEPS': 20,
-    'LEARNING_RATE': 0.001,  # 提高学习率
+    'ENV_MAX_STEPS': 30,
+    'LEARNING_RATE': 0.003,  # 提高学习率，加快学习速度
     'GAMMA': 0.99,
     'K_EPOCHS': 10,  # 增加更新轮数
     'EPS_CLIP': 0.2,
@@ -80,7 +84,7 @@ CONFIG = {
     'CENTER_THRESHOLD': 0.1,
     'BASE_COMPLETION_REWARD': 250,
     'QUICK_COMPLETION_BONUS_FACTOR': 8,
-    'CLIMB_CONFIDENCE_THRESHOLD': 0.85,
+    'CLIMB_CONFIDENCE_THRESHOLD': 0.4,
     'USE_SLAM_MAP': False,
 }
 
@@ -333,114 +337,59 @@ class TargetSearchEnvironment:
         current_area = self._get_max_detection_area(detection_results) if detection_results else 0
 
         # 奖励参数
-        STEP_PENALTY = -1.0     # 时间惩罚：-1分/步
+        STEP_PENALTY = -5.0     # 时间惩罚：-5分/步
         SUCCESS_REWARD = 500.0  # 完成奖励
-        GATE_REWARD = 2.0       # 看到门就给2分
-        FORWARD_REWARD = 2.0     # 前进动作奖励
-        STAY_PENALTY = -1.0      # 不动动作惩罚
 
         # 1. 时间惩罚
         step_penalty = STEP_PENALTY
 
-        # 2. 移动动作奖励
-        move_reward = FORWARD_REWARD if move_action == 0 else STAY_PENALTY
-
-        # 3. 门检测奖励 - 看到门就给2分
+        # 2. 门检测奖励 - 根据门的面积大小给予不同档次的奖励
         gate_reward = 0.0
         success_bonus = 0.0
         
         # 检查YOLO检测是否成功
         if detection_results:
             # 检查是否检测到门
-            gate_detected = any(detection['label'].lower() == 'gate' or 'gate' in detection['label'].lower() for detection in detection_results)
+            gate_detections = [detection for detection in detection_results if detection['label'].lower() == 'gate' or 'gate' in detection['label'].lower()]
             
-            # 看到门就给2分
-            if gate_detected:
-                gate_reward = GATE_REWARD
-                self.logger.info(f"检测到门，奖励: {gate_reward:.2f}")
+            # 根据门的面积大小给予不同档次的奖励
+            if gate_detections:
+                # 计算所有门的面积
+                gate_areas = []
+                for detection in gate_detections:
+                    x1, y1, x2, y2 = detection['bbox']
+                    area = (x2 - x1) * (y2 - y1)
+                    gate_areas.append(area)
+                
+                # 取最大面积的门
+                max_gate_area = max(gate_areas)
+                
+                # 根据面积大小分档奖励
+                if max_gate_area >= 50000:
+                    gate_reward = 15  # 5w以上
+                elif max_gate_area >= 30000:
+                    gate_reward = 10 # 3w-5w
+                elif max_gate_area >= 10000:
+                    gate_reward = 5  # 1w-3w
+                else:
+                    gate_reward = 0.0  # 1w以下
+                
+                self.logger.info(f"检测到门，面积: {max_gate_area:.0f}, 奖励: {gate_reward:.2f}")
             else:
                 gate_reward = 0.0
 
-            # 4. 完成奖励
+            # 3. 完成奖励
             if self._check_climb_conditions(detection_results):
                 success_bonus = SUCCESS_REWARD
 
         # 计算总奖励
-        total_reward = step_penalty + move_reward + gate_reward + success_bonus
+        total_reward = step_penalty + gate_reward + success_bonus
         self.logger.info(f"奖励分解 - 时间: {step_penalty:.2f}, 门: {gate_reward:.2f}, 完成: {success_bonus:.2f}, 总计: {total_reward:.2f}")
 
         return total_reward, current_area
 
-    def _calculate_center_reward(self, detection_results, reward_weight):
-        """
-        计算朝向中心的奖励
-        目标越靠近画面中心，奖励越高
-        避免了"距离近但没看向目标"的问题
-        """
-        if not detection_results:
-            return -5.0  # 未检测到目标的小惩罚
 
-        img_width = CONFIG['IMAGE_WIDTH']
-        img_height = CONFIG['IMAGE_HEIGHT']
-        center_x = img_width / 2
-        center_y = img_height / 2
 
-        # 计算所有检测框的中心点
-        center_rewards = []
-        for det in detection_results:
-            x1, y1, x2, y2 = det['bbox']
-            det_center_x = (x1 + x2) / 2
-            det_center_y = (y1 + y2) / 2
-
-            # 计算与画面中心的归一化距离（0~1）
-            dist_x = abs(det_center_x - center_x) / (img_width / 2)
-            dist_y = abs(det_center_y - center_y) / (img_height / 2)
-            dist_avg = (dist_x + dist_y) / 2
-
-            # 距离中心越近，奖励越高（距离为0时奖励最大）
-            center_reward = reward_weight * (1.0 - dist_avg)
-            center_rewards.append(center_reward)
-
-        # 取最大朝向中心奖励
-        return max(center_rewards) if center_rewards else -5.0
-
-    def _calculate_repetition_penalty(self, turn_action):
-        """
-        重复动作惩罚 - 只考虑转头动作
-        特别关注转头动作，避免"转到零"的视角混乱问题
-        """
-        if len(self.action_history) < 3:
-            return 0.0
-
-        recent_actions = list(self.action_history)[-3:]
-        same_action_count = sum(1 for act in recent_actions if act[1] == turn_action)  # 只比较转头动作
-
-        # 检查是否是重复的转头动作
-        turn_only = True  # 所有动作都只是转头
-
-        if turn_only:
-            # 纯转头动作，检查是否在来回转头（左-右-左-右）
-            if len(recent_actions) >= 3:
-                recent_turns = [act[1] for act in recent_actions[-3:]]  # 获取最近的转头动作
-                # 如果转头动作模式是 0-1-0 或 1-0-1（左右来回）
-                if recent_turns == [0, 1, 0] or recent_turns == [1, 0, 1]:
-                    return -80.0  # 严重惩罚左右来回转头
-
-            # 连续相同转头动作的惩罚
-            if same_action_count >= 3:
-                return -100.0  # 严重惩罚连续3次相同转头
-            elif same_action_count >= 2:
-                return -50.0  # 中等惩罚连续2次相同转头
-            else:
-                return -10.0  # 轻微惩罚纯转头（鼓励结合移动）
-        else:
-            # 移动动作的惩罚
-            if same_action_count >= 3:
-                return -50.0  # 严重惩罚连续3次相同移动
-            elif same_action_count >= 2:
-                return -20.0  # 中等惩罚连续2次相同移动
-            else:
-                return 0.0  # 不惩罚
 
     def _get_max_detection_area(self, detection_results):
         """
@@ -599,7 +548,7 @@ class TargetSearchEnvironment:
 
 class PolicyNetwork(nn.Module):
     """
-    策略网络 - 修改版，只输出转头动作
+    策略网络 - 简化版，只输出转头动作，移除了GRU层
     """
     def __init__(self, state_dim, turn_action_dim):
         super(PolicyNetwork, self).__init__()
@@ -623,20 +572,14 @@ class PolicyNetwork(nn.Module):
         # 使用全局平均池化自适应处理不同输入尺寸
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # 全连接层 - 256个通道
+        # 全连接层 - 从卷积特征映射到中间层
         self.fc_shared = nn.Sequential(
             nn.Linear(256, 512),
             nn.ReLU(),
-            nn.Dropout(0.3)
-        )
-
-        # 添加GRU层 - 处理序列数据，捕捉时间依赖关系
-        self.gru = nn.GRU(
-            input_size=512,  # 输入特征维度
-            hidden_size=512,  # 隐藏状态维度
-            num_layers=1,     # GRU层数
-            batch_first=True, # 批处理维度在前
-            dropout=0.2       # Dropout率
+            nn.Dropout(0.3),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(0.2)
         )
 
         # 转头动作策略头
@@ -653,7 +596,7 @@ class PolicyNetwork(nn.Module):
             nn.Linear(256, 1)
         )
 
-    def forward(self, x, h=None):
+    def forward(self, x):
         # 归一化输入
         x = x / 255.0
 
@@ -669,19 +612,12 @@ class PolicyNetwork(nn.Module):
 
         conv_features = self.global_avg_pool(conv_features)  # 全局平均池化 (B, 256, 1, 1)
         conv_features = conv_features.view(conv_features.size(0), -1)  # 展平 (B, 256)
+        
         shared_features = self.fc_shared(conv_features)  # 共享全连接层处理
 
-        # 添加序列维度，适应GRU输入格式 (B, T, C)
-        # 这里T=1，因为每次只处理一个时间步
-        gru_input = shared_features.unsqueeze(1)  # (B, 1, 512)
-
-        # GRU前向传播
-        gru_out, h_n = self.gru(gru_input, h)  # gru_out: (B, 1, 512), h_n: (1, B, 512)
-        gru_out = gru_out.squeeze(1)  # 移除时间维度 (B, 512)
-
         # 转头动作策略头
-        turn_logits = self.turn_policy(gru_out)      # 转头动作logits
-        state_values = self.value_head(gru_out)     # 状态价值
+        turn_logits = self.turn_policy(shared_features)      # 转头动作logits
+        state_values = self.value_head(shared_features)     # 状态价值
 
         turn_probs = torch.softmax(turn_logits, dim=-1)
 
@@ -696,7 +632,7 @@ class PolicyNetwork(nn.Module):
         print(f"[神经网络最后一层] 转头动作概率: {turn_probs_rounded}")
         print(f"[神经网络最后一层] 状态价值: {state_values_rounded}")
 
-        return turn_probs, state_values, h_n
+        return turn_probs, state_values
 
 class PPOAgent:
     """
@@ -707,7 +643,7 @@ class PPOAgent:
         self.gamma = gamma
         self.eps_clip = eps_clip
         self.K_epochs = K_epochs  # 增加更新轮数
-        self.entropy_coef = 0.01  # 熵正则化系数，鼓励探索
+        self.entropy_coef = 0.5  # 提高熵正则化系数，鼓励更多探索
 
         self.policy = PolicyNetwork(state_dim, turn_action_dim)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr, weight_decay=1e-5)
@@ -743,13 +679,8 @@ class PPOAgent:
                           f"范围: [{state_tensor.min().item():.0f}, {state_tensor.max().item():.0f}]")
             self._debug_printed = True
 
-        # 初始化GRU隐藏状态（如果不存在）
-        if not hasattr(self, 'gru_hidden'):
-            # 创建初始隐藏状态 (num_layers, batch_size, hidden_size)
-            self.gru_hidden = torch.zeros(1, 1, 512)
-
         with torch.no_grad():
-            turn_probs, state_values, self.gru_hidden = self.policy_old(state_tensor, self.gru_hidden)
+            turn_probs, state_values = self.policy_old(state_tensor)
 
             # 转头动作概率
             turn_probs_np = turn_probs.squeeze().cpu().numpy()
@@ -766,18 +697,16 @@ class PPOAgent:
             turn_logprob = turn_dist.log_prob(turn_action)
             logprob = turn_logprob  # 只计算转头动作的对数概率
 
-            # 只在前10步打印详细信息，后面简化输出
-            if len(memory.rewards) < 10:
+            # 只在第1步和最后5步打印详细信息，后面简化输出
+            if len(memory.rewards) == 0 or len(memory.rewards) >= 15:  # 假设max_steps=20
                 turn_entropy = turn_dist.entropy().mean()
                 self.logger.info(f"[网络] 转头: [{turn_probs_np[0]:.3f} {turn_probs_np[1]:.3f}] 价值: {value_np:.3f} | "
-                               f"最佳: 转头-{turn_max_idx} | "
-                               f"输入均值: {getattr(self.policy_old, 'input_mean', 0):.3f}, "
-                               f"卷积均值: {getattr(self.policy_old, 'conv_mean', 0):.3f}")
+                               f"最佳: 转头-{turn_max_idx}")
                 self.logger.info(f"[探索] 转头熵: {turn_entropy:.4f}")
 
         # 动作参数
-        # 默认前进，固定前进时间为0.5秒
-        move_duration = 0.5  # 固定前进时间
+        # 默认前进，固定前进时间为0.3秒
+        move_duration = 0.3  # 固定前进时间
         turn_angle = 30
 
         # 存储到记忆中
@@ -793,8 +722,7 @@ class PPOAgent:
         if return_debug_info:
             return move_action, turn_action.item(), move_duration, turn_angle, {
                 'turn_probs': turn_probs.cpu().numpy(),
-                'value': state_values,
-                'gru_hidden': self.gru_hidden.cpu().numpy()
+                'value': state_values
             }
 
         return move_action, turn_action.item(), move_duration, turn_angle
@@ -825,11 +753,8 @@ class PPOAgent:
 
         # PPO更新
         for _ in range(self.K_epochs):
-            # 初始化GRU隐藏状态
-            gru_hidden = torch.zeros(1, old_states.size(0), 512)
-
             # 前向传播
-            turn_probs, state_values, _ = self.policy(old_states, gru_hidden)
+            turn_probs, state_values = self.policy(old_states)
 
             # 创建分布
             turn_dist = torch.distributions.Categorical(turn_probs)
@@ -899,8 +824,11 @@ class PPOAgent:
             'policy_state_dict': self.policy.state_dict(),
             'policy_old_state_dict': self.policy_old.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'loss_history': self.loss_history,
+            'reward_history': self.reward_history,
         }, checkpoint_path)
         self.logger.info(f"模型检查点已保存: {checkpoint_path}")
+        self.logger.info(f"保存了 {len(self.loss_history)} 条损失记录和 {len(self.reward_history)} 条奖励记录")
 
     def load_checkpoint(self, checkpoint_path):
         """
@@ -910,7 +838,89 @@ class PPOAgent:
         self.policy.load_state_dict(checkpoint['policy_state_dict'])
         self.policy_old.load_state_dict(checkpoint['policy_old_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # 加载训练历史
+        if 'loss_history' in checkpoint:
+            self.loss_history = checkpoint['loss_history']
+        if 'reward_history' in checkpoint:
+            self.reward_history = checkpoint['reward_history']
         self.logger.info(f"模型检查点已加载: {checkpoint_path}")
+        self.logger.info(f"加载了 {len(self.loss_history)} 条损失记录和 {len(self.reward_history)} 条奖励记录")
+
+    def generate_cnn_heatmap(self, state):
+        """
+        使用GradCAM生成CNN解释化掩码
+        """
+        # 确保输入状态的形状正确
+        if len(state.shape) == 3:  # (H, W, C)
+            state_tensor = torch.FloatTensor(state).unsqueeze(0).permute(0, 3, 1, 2)
+        else:
+            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        
+        # 确保模型处于评估模式
+        self.policy.eval()
+        
+        # 创建GradCAM解释器，目标是最后一个卷积层
+        # 获取模型的卷积层列表
+        conv_layers = []
+        for name, module in self.policy.named_modules():
+            if isinstance(module, nn.Conv2d):
+                conv_layers.append(name)
+        
+        # 选择最后一个卷积层作为目标
+        target_layer = None
+        if conv_layers:
+            target_layer_name = conv_layers[-1]
+            # 获取目标层
+            target_layer = dict(self.policy.named_modules())[target_layer_name]
+        
+        if target_layer is None:
+            self.logger.error("无法找到卷积层，无法生成热力图")
+            return state
+        
+        # 创建一个包装函数，只返回我们想要解释的部分
+        def model_wrapper(inputs):
+            turn_probs, _ = self.policy(inputs)
+            return turn_probs
+        
+        # 创建GradCAM解释器
+        grad_cam = LayerGradCam(
+            forward_func=model_wrapper,
+            layer=target_layer
+        )
+        
+        # 生成归因
+        with torch.no_grad():
+            turn_probs, _ = self.policy(state_tensor)
+        target_class = torch.argmax(turn_probs, dim=1).item()
+        
+        # 计算GradCAM归因
+        attributions = grad_cam.attribute(
+            state_tensor,
+            target=target_class
+        )
+        
+        # 将归因转换为热力图
+        heatmap = attributions.squeeze().detach().cpu().numpy()
+        heatmap = np.maximum(heatmap, 0)  # ReLU激活
+        heatmap /= np.max(heatmap) if np.max(heatmap) > 0 else 1  # 归一化
+        
+        # 调整热力图大小以匹配原始图像
+        heatmap = cv2.resize(heatmap, (state.shape[1], state.shape[0]))
+        heatmap = np.uint8(255 * heatmap)  # 转换为0-255范围
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  # 应用颜色映射
+        
+        # 叠加热力图到原始图像
+        original_image = state.copy()
+        if original_image.max() > 1:  # 如果图像是0-255范围
+            original_image = original_image / 255.0
+        
+        heatmap = heatmap / 255.0
+        overlay = cv2.addWeighted(original_image, 0.7, heatmap, 0.3, 0)
+        
+        # 转换回0-255范围
+        overlay = np.uint8(255 * overlay)
+        
+        return overlay
 
 def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True, print_debug=False, visualizer=None):
     """
@@ -929,7 +939,11 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
     climb_detected = env._check_climb_conditions(initial_detections)
     
     while step_count < env.max_steps and not climb_detected:
+        # 生成CNN解释化掩码
+        cnn_heatmap = ppo_agent.generate_cnn_heatmap(state)
+        
         # 训练模式：使用act方法
+        
         if training_mode:
             if print_debug:
                 turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.select_action(
@@ -962,6 +976,8 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
         total_reward += reward
         state = next_state
         step_count += 1
+    
+
 
     # 训练模式下的更新
     if training_mode and len(episode_memory.rewards) > 0:
@@ -1060,7 +1076,7 @@ def evaluate_trained_ppo_agent(model_path, evaluation_episodes=10, show_visualiz
     
     return evaluation_result
 
-def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_existing=True, show_visualization=False):
+def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth', load_existing=True, show_visualization=False):
     """
     继续训练PPO智能体 - 添加可视化支持
     """
@@ -1083,9 +1099,10 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
     )
     
     start_episode = 0
+    episode_rewards = []
     
-    if load_existing and os.path.exists(model_path):
-        # 首先查找检查点文件
+    if load_existing:
+        # 首先查找检查点文件（即使主模型文件不存在）
         latest_checkpoint = find_latest_checkpoint(model_path)
         
         if latest_checkpoint:
@@ -1094,24 +1111,60 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
             ppo_agent.policy.load_state_dict(checkpoint['policy_state_dict'])
             ppo_agent.policy_old.load_state_dict(checkpoint['policy_old_state_dict'])
             ppo_agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # 加载训练历史
+            if 'loss_history' in checkpoint:
+                ppo_agent.loss_history = checkpoint['loss_history']
+            if 'reward_history' in checkpoint:
+                ppo_agent.reward_history = checkpoint['reward_history']
+                episode_rewards = checkpoint['reward_history']
             start_episode = int(latest_checkpoint.split('_')[-1].replace('.pth', ''))
             print(f"从检查点加载模型: {latest_checkpoint}, 从第 {start_episode} 轮开始")
+            print(f"加载了 {len(ppo_agent.loss_history)} 条损失记录和 {len(ppo_agent.reward_history)} 条奖励记录")
         elif os.path.exists(model_path):
             # 没有检查点但主模型存在，加载主模型
             checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
             ppo_agent.policy.load_state_dict(checkpoint['policy_state_dict'])
             ppo_agent.policy_old.load_state_dict(checkpoint['policy_old_state_dict'])
             ppo_agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # 加载训练历史
+            if 'loss_history' in checkpoint:
+                ppo_agent.loss_history = checkpoint['loss_history']
+            if 'reward_history' in checkpoint:
+                ppo_agent.reward_history = checkpoint['reward_history']
+                episode_rewards = checkpoint['reward_history']
             print(f"从主模型加载: {model_path}, 从第 0 轮开始")
+            print(f"加载了 {len(ppo_agent.loss_history)} 条损失记录和 {len(ppo_agent.reward_history)} 条奖励记录")
+        else:
+            print(f"没有找到模型文件或检查点文件: {model_path}")
     
     # 创建目录用于保存训练效果图片
     training_plots_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training_plots")
     if not os.path.exists(training_plots_dir):
         os.makedirs(training_plots_dir)
 
+    # 创建目录用于保存CNN掩码
+    cnn_masks_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cnn_masks")
+    if not os.path.exists(cnn_masks_dir):
+        os.makedirs(cnn_masks_dir)
+    
+    # 创建一个可视化窗口，在整个训练过程中重用
+    window_name = "CNN Explanation"
+    window_created = False
+    try:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        # 减小窗口大小
+        cv2.resizeWindow(window_name, 500, 400)
+        # 将窗口移动到屏幕左上角
+        cv2.moveWindow(window_name, 0, 0)
+        window_created = True
+    except Exception as e:
+        print(f"无法创建可视化窗口: {e}")
+        print("将保存CNN掩码为图像文件")
+    
     # 训练循环 - 使用正确的训练流程
     episode_rewards = []  # 记录每个episode的总奖励
-    combined_memory = Memory()  # 用于累积5个episode的经验
+    combined_memory = Memory()  # 用于累积经验
+    MAX_MEMORY_SIZE = 5000  # 最大经验记忆大小，避免内存溢出
     
     for episode in range(start_episode, 2001):
         print(f"\n=== Episode {episode} Started ===")
@@ -1121,7 +1174,32 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
         episode_memory = Memory()
         total_reward = 0
 
+        # 只保存5张mask图片
+        max_masks_to_save = 5
+        steps_per_mask = max(1, env.max_steps // max_masks_to_save)
+        
         for t in range(env.max_steps):
+            
+            # 生成CNN解释化掩码
+            cnn_heatmap = ppo_agent.generate_cnn_heatmap(state)
+            
+            # 只在特定步骤保存mask图片，总共保存5张
+            if t % steps_per_mask == 0 or t == env.max_steps - 1:
+                mask_filename = os.path.join(cnn_masks_dir, f"episode_{episode}_step_{t+1}.png")
+                cv2.imwrite(mask_filename, cnn_heatmap)
+                print(f"CNN掩码已保存: {mask_filename}")
+            
+            # 尝试显示CNN掩码
+            if window_created:
+                try:
+                    # 更新窗口标题以显示当前episode和步骤
+                    cv2.setWindowTitle(window_name, f"CNN Explanation - Episode {episode}, Step {t+1}")
+                    cv2.imshow(window_name, cnn_heatmap)
+                    cv2.waitKey(100)  # 显示100毫秒
+                except Exception as e:
+                    print(f"无法显示图像: {e}")
+                    window_created = False
+            
             # 智能体选择动作（选择移动动作和转头动作）
             move_action, turn_action, move_duration, turn_angle = ppo_agent.select_action(
                 state, episode_memory
@@ -1143,12 +1221,27 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
             if done:
                 break
 
+        # 记录训练信息（简化格式，在环境重置前打印）
+        print(f"Ep {episode}: R={total_reward:.2f}, Steps={t+1}")
+        ppo_agent.logger.info(f"Episode {episode}, Total Reward: {total_reward:.2f}, Steps: {t+1}")
+
         # 记录奖励
         episode_rewards.append(total_reward)
         ppo_agent.reward_history.append(total_reward)
 
         # 将当前episode的经验添加到累积记忆中
         for i in range(len(episode_memory.states)):
+            # 检查记忆大小是否超过限制，如果超过则移除最早的经验
+            if len(combined_memory.rewards) >= MAX_MEMORY_SIZE:
+                # 移除最早的经验
+                combined_memory.states.pop(0)
+                combined_memory.turn_actions.pop(0)
+                combined_memory.logprobs.pop(0)
+                combined_memory.rewards.pop(0)
+                combined_memory.is_terminals.pop(0)
+                if len(combined_memory.action_params) > 0:
+                    combined_memory.action_params.pop(0)
+            
             combined_memory.append(
                 episode_memory.states[i],
                 episode_memory.turn_actions[i],
@@ -1162,17 +1255,18 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
         if (episode + 1) % 2 == 0:
             if len(combined_memory.rewards) > 0:
                 ppo_agent.update(combined_memory)
-                print(f"Episode {episode}: 每2轮策略更新完成")
+                print(f"Ep {episode}: 策略更新完成")
                 ppo_agent.logger.info(f"Episode {episode}: 每2轮策略更新完成")
-                combined_memory.clear_memory()  # 清空记忆，准备下一轮
-
-        # 记录训练信息
-        print(f"Episode {episode}, Total Reward: {total_reward:.2f}, Steps: {t+1}")
-        ppo_agent.logger.info(f"Episode {episode}, Total Reward: {total_reward:.2f}, Steps: {t+1}")
+                # 保留之前的经验，不清空记忆
+                # combined_memory.clear_memory()  # 注释掉清空操作，保留经验
+                print(f"Ep {episode}: 保留经验记忆，当前记忆长度: {len(combined_memory.rewards)}")
+                ppo_agent.logger.info(f"Episode {episode}: 保留经验记忆，当前记忆长度: {len(combined_memory.rewards)}")
 
         # 每10轮保存一次检查点
         if (episode + 1) % 10 == 0:
-            checkpoint_path = f'ppo_model_checkpoint_ep_{episode}.pth'
+            # 确保sifu_model文件夹存在
+            os.makedirs('sifu_model', exist_ok=True)
+            checkpoint_path = f'sifu_model/ppo_model_checkpoint_ep_{episode}.pth'
             ppo_agent.save_checkpoint(checkpoint_path)
 
         # 每20轮生成并保存训练效果图片
@@ -1241,6 +1335,13 @@ def continue_training_ppo_agent(model_path='ppo_model_checkpoint.pth', load_exis
             
             print(f"训练效果图表已保存: {plot_path}")
             ppo_agent.logger.info(f"训练效果图表已保存: {plot_path}")
+    
+    # 训练结束后关闭可视化窗口
+    if window_created:
+        try:
+            cv2.destroyWindow(window_name)
+        except Exception as e:
+            print(f"无法关闭可视化窗口: {e}")
 
 def find_latest_checkpoint(model_path):
     """
@@ -1249,6 +1350,11 @@ def find_latest_checkpoint(model_path):
     import re
     model_dir = os.path.dirname(model_path)
     model_base_name = os.path.basename(model_path).replace('.pth', '')
+    
+    # 确保sifu_model文件夹存在
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir, exist_ok=True)
+        return None
     
     # 查找所有相关的检查点文件
     checkpoint_pattern = re.compile(rf'{re.escape(model_base_name)}_ep_(\d+)\.pth$')
@@ -1293,41 +1399,9 @@ def main():
     if len(sys.argv) < 2:
         print("默认运行继续训练...")
         continue_training_ppo_agent(show_visualization=False)
-        print("导入成功！")
-        print("\n可用的功能:")
-        print("1. 训练门搜索智能体: python ppo_training.py train_new_ppo_agent [model_path]")
-        print("2. 继续训练门搜索智能体: python ppo_training.py continue_train_ppo_agent [model_path] [show_viz]")
-        print("3. 评估已训练模型: python ppo_training.py evaluate_trained_ppo_agent [model_path] [show_viz]")
-        print("4. 启动可视化窗口: python ppo_training.py visualize")
-        
+
         return
 
-    command = sys.argv[1]
-    
-    if command == "train_new_ppo_agent":
-        model_path = sys.argv[2] if len(sys.argv) > 2 else 'ppo_model_new.pth'
-        show_viz = sys.argv[3].lower() == 'true' if len(sys.argv) > 3 else False
-        continue_training_ppo_agent(model_path, load_existing=False, show_visualization=show_viz)
-    elif command == "continue_train_ppo_agent":
-        model_path = sys.argv[2] if len(sys.argv) > 2 else 'ppo_model_checkpoint.pth'
-        show_viz = sys.argv[3].lower() == 'true' if len(sys.argv) > 3 else False
-        continue_training_ppo_agent(model_path, load_existing=True, show_visualization=show_viz)
-    elif command == "evaluate_trained_ppo_agent":
-        model_path = sys.argv[2] if len(sys.argv) > 2 else 'ppo_model_checkpoint.pth'
-        show_viz = sys.argv[3].lower() == 'true' if len(sys.argv) > 3 else False
-        evaluation_episodes = int(sys.argv[4]) if len(sys.argv) > 4 else 10
-        evaluate_trained_ppo_agent(model_path, evaluation_episodes, show_visualization=show_viz)
-    elif command == "visualize":
-        # 启动可视化窗口
-        env = TargetSearchEnvironment(CONFIG['TARGET_DESCRIPTION'])
-        env.start_visualizer()
-    else:
-        print(f"未知命令: {command}")
-        print("可用命令:")
-        print("1. train_new_ppo_agent [model_path] [show_viz]")
-        print("2. continue_train_ppo_agent [model_path] [show_viz]")
-        print("3. evaluate_trained_ppo_agent [model_path] [show_viz] [evaluation_episodes]")
-        print("4. visualize")
-
+ 
 if __name__ == "__main__":
     main()

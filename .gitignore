@@ -35,3 +35,7 @@ model*
 *game_memory.json
 screenshots*
 vector_memory_db*
+*training_plots*
+*checkpoint*pth
+*cnn_masks*
+*test_results*
