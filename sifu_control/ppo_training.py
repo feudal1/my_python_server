@@ -26,6 +26,44 @@ matplotlib.use('TkAgg')  # 使用交互式后端，支持可视化窗口
 from captum.attr import IntegratedGradients, Saliency, LayerGradCam
 from captum.attr import visualization as viz
 
+def remove_black_borders(image, threshold=10):
+    """
+    去除图像外围的黑边
+    
+    参数:
+    - image: 输入图像 (H, W, C)
+    - threshold: 像素值阈值，低于此值视为黑边
+    
+    返回:
+    - 去除黑边后的图像
+    """
+    # 转换为灰度图
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+    
+    # 找到非黑边区域
+    non_black_pixels = np.where(gray > threshold)
+    
+    if len(non_black_pixels[0]) == 0:
+        # 全黑图像，返回原图
+        return image
+    
+    # 计算边界
+    top = non_black_pixels[0].min()
+    bottom = non_black_pixels[0].max()
+    left = non_black_pixels[1].min()
+    right = non_black_pixels[1].max()
+    
+    # 裁剪图像
+    cropped = image[top:bottom+1, left:right+1]
+    
+    # 调整大小回原始尺寸
+    resized = cv2.resize(cropped, (image.shape[1], image.shape[0]))
+    
+    return resized
+
 # 设置中文字体支持
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体字
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
@@ -58,9 +96,14 @@ def setup_logging():
     console_handler.setLevel(logging.INFO)
     
     # 创建格式器
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
+    # 文件处理器使用详细格式
+    file_formatter = logging.Formatter('%(message)s')
+    # 控制台处理器使用简洁格式（只包含消息）
+
+    console_formatter = logging.Formatter('%(message)s')
+    
+    file_handler.setFormatter(file_formatter)
+    console_handler.setFormatter(console_formatter)
     
     # 添加处理器到logger
     logger.addHandler(file_handler)
@@ -384,7 +427,6 @@ class TargetSearchEnvironment:
 
         # 计算总奖励
         total_reward = step_penalty + gate_reward + success_bonus
-        self.logger.info(f"奖励分解 - 时间: {step_penalty:.2f}, 门: {gate_reward:.2f}, 完成: {success_bonus:.2f}, 总计: {total_reward:.2f}")
 
         return total_reward, current_area
 
@@ -453,7 +495,7 @@ class TargetSearchEnvironment:
         self.last_area = new_area
         
         # 修改:现在在计算完奖励后才输出日志
-        self.logger.info(f"S {self.step_count}, A: {new_area:.2f}, R: {reward:.2f}")
+        self.logger.info(f"S {self.step_count}, A: {(new_area/10000):.1f}, R: {reward:.0f}")
         
         # 更新动作历史
         self.action_history.append((0, turn_action))  # move_action设为0
@@ -553,47 +595,45 @@ class PolicyNetwork(nn.Module):
     def __init__(self, state_dim, turn_action_dim):
         super(PolicyNetwork, self).__init__()
 
-        # 更深的卷积特征提取器
+        # 更轻量的卷积特征提取器
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=8, stride=4, padding=1),
+            nn.Conv2d(3, 16, kernel_size=8, stride=4, padding=1),  # 减少通道数
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=1),  # 减少通道数
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),  # 减少通道数
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
+            # 移除一个卷积层，减少网络深度
         )
 
         # 使用全局平均池化自适应处理不同输入尺寸
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # 全连接层 - 从卷积特征映射到中间层
+        # 更轻量的全连接层
         self.fc_shared = nn.Sequential(
-            nn.Linear(256, 512),
+            nn.Linear(64, 128),  # 减少神经元数
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(512, 512),
+            nn.Linear(128, 128),  # 减少神经元数
             nn.ReLU(),
             nn.Dropout(0.2)
         )
 
         # 转头动作策略头
         self.turn_policy = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(128, 64),  # 减少神经元数
             nn.ReLU(),
-            nn.Linear(256, turn_action_dim)
+            nn.Linear(64, turn_action_dim)
         )
 
         # 价值函数头
         self.value_head = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(128, 64),  # 减少神经元数
             nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(64, 1)
         )
 
     def forward(self, x):
@@ -621,16 +661,8 @@ class PolicyNetwork(nn.Module):
 
         turn_probs = torch.softmax(turn_logits, dim=-1)
 
-        # 打印神经网络最后一层的值（保留两位小数）
-        turn_probs_np = turn_probs.detach().cpu().numpy().tolist()
-        state_values_np = state_values.detach().cpu().numpy().tolist()
-        
-        # 保留两位小数
-        turn_probs_rounded = [[round(val, 2) for val in sublist] for sublist in turn_probs_np]
-        state_values_rounded = [[round(val, 2) for val in sublist] for sublist in state_values_np]
-        
-        print(f"[神经网络最后一层] 转头动作概率: {turn_probs_rounded}")
-        print(f"[神经网络最后一层] 状态价值: {state_values_rounded}")
+        # 只在需要时打印，避免每次前向传播都打印
+        # 这些信息已经在select_action方法中打印了
 
         return turn_probs, state_values
 
@@ -665,6 +697,10 @@ class PPOAgent:
         """
         选择动作 - 只选择转头动作，默认前进
         """
+        # 去除图像黑边
+        if len(state.shape) == 3:  # (H, W, C)
+            state = remove_black_borders(state)
+        
         # 确保输入状态的形状正确
         if len(state.shape) == 3:  # (H, W, C)
             state_tensor = torch.FloatTensor(state).unsqueeze(0).permute(0, 3, 1, 2)
@@ -696,13 +732,12 @@ class PPOAgent:
             turn_action = turn_dist.sample()
             turn_logprob = turn_dist.log_prob(turn_action)
             logprob = turn_logprob  # 只计算转头动作的对数概率
+            
+        # 返回转头动作概率
+        self.turn_probs = turn_probs_np
 
-            # 只在第1步和最后5步打印详细信息，后面简化输出
-            if len(memory.rewards) == 0 or len(memory.rewards) >= 15:  # 假设max_steps=20
-                turn_entropy = turn_dist.entropy().mean()
-                self.logger.info(f"[网络] 转头: [{turn_probs_np[0]:.3f} {turn_probs_np[1]:.3f}] 价值: {value_np:.3f} | "
-                               f"最佳: 转头-{turn_max_idx}")
-                self.logger.info(f"[探索] 转头熵: {turn_entropy:.4f}")
+
+       
 
         # 动作参数
         # 默认前进，固定前进时间为0.3秒
@@ -850,6 +885,10 @@ class PPOAgent:
         """
         使用GradCAM生成CNN解释化掩码
         """
+        # 去除图像黑边
+        if len(state.shape) == 3:  # (H, W, C)
+            state = remove_black_borders(state)
+        
         # 确保输入状态的形状正确
         if len(state.shape) == 3:  # (H, W, C)
             state_tensor = torch.FloatTensor(state).unsqueeze(0).permute(0, 3, 1, 2)
@@ -946,7 +985,7 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
         
         if training_mode:
             if print_debug:
-                turn_action, move_forward_step, turn_angle, debug_info = ppo_agent.select_action(
+                move_action, turn_action, move_duration, turn_angle, debug_info = ppo_agent.select_action(
                     state, episode_memory, return_debug_info=True)
                 
                 # 打印调试信息
@@ -954,16 +993,16 @@ def run_episode(env, ppo_agent, episode_num, total_episodes, training_mode=True,
                     print(f"turn_probs shape: {np.array(debug_info['turn_probs']).shape}")
                     print(f"turn_action: {turn_action}")
             else:
-                turn_action, move_forward_step, turn_angle = ppo_agent.select_action(
+                move_action, turn_action, move_duration, turn_angle = ppo_agent.select_action(
                     state, episode_memory)
         else:
             # 评估模式：使用确定性动作
-            turn_action, move_forward_step, turn_angle = ppo_agent.select_action(
+            move_action, turn_action, move_duration, turn_angle = ppo_agent.select_action(
                 state, episode_memory)
         
-        # 执行环境步骤（只传入转头动作）
+        # 执行环境步骤（传入移动动作和转头动作）
         next_state, reward, done, detection_results = env.step(
-            turn_action, turn_angle)
+            move_action, turn_action, move_duration, turn_angle)
         
         # 检查是否检测到climb
         climb_detected = env._check_climb_conditions(detection_results)
@@ -1142,11 +1181,6 @@ def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth'
     if not os.path.exists(training_plots_dir):
         os.makedirs(training_plots_dir)
 
-    # 创建目录用于保存CNN掩码
-    cnn_masks_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cnn_masks")
-    if not os.path.exists(cnn_masks_dir):
-        os.makedirs(cnn_masks_dir)
-    
     # 创建一个可视化窗口，在整个训练过程中重用
     window_name = "CNN Explanation"
     window_created = False
@@ -1157,10 +1191,11 @@ def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth'
         # 将窗口移动到屏幕左上角
         cv2.moveWindow(window_name, 0, 0)
         window_created = True
+        print("已创建可视化窗口")
     except Exception as e:
         print(f"无法创建可视化窗口: {e}")
-        print("将保存CNN掩码为图像文件")
-    
+        print("将只生成CNN掩码，不显示")
+
     # 训练循环 - 使用正确的训练流程
     episode_rewards = []  # 记录每个episode的总奖励
     combined_memory = Memory()  # 用于累积经验
@@ -1173,21 +1208,11 @@ def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth'
         state = env.reset()
         episode_memory = Memory()
         total_reward = 0
-
-        # 只保存5张mask图片
-        max_masks_to_save = 5
-        steps_per_mask = max(1, env.max_steps // max_masks_to_save)
         
         for t in range(env.max_steps):
             
             # 生成CNN解释化掩码
             cnn_heatmap = ppo_agent.generate_cnn_heatmap(state)
-            
-            # 只在特定步骤保存mask图片，总共保存5张
-            if t % steps_per_mask == 0 or t == env.max_steps - 1:
-                mask_filename = os.path.join(cnn_masks_dir, f"episode_{episode}_step_{t+1}.png")
-                cv2.imwrite(mask_filename, cnn_heatmap)
-                print(f"CNN掩码已保存: {mask_filename}")
             
             # 尝试显示CNN掩码
             if window_created:
@@ -1204,6 +1229,10 @@ def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth'
             move_action, turn_action, move_duration, turn_angle = ppo_agent.select_action(
                 state, episode_memory
             )
+            
+            # 打印转头动作概率
+            turn_probs = getattr(ppo_agent, 'turn_probs', [0, 0])
+            print(f"Step {t+1}: 转头动作概率 - 左转: {turn_probs[0]:.4f}, 右转: {turn_probs[1]:.4f}")
 
             # 执行环境步骤（传入移动动作和转头动作）
             next_state, reward, done, detections = env.step(
@@ -1251,12 +1280,12 @@ def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth'
                 episode_memory.action_params[i] if i < len(episode_memory.action_params) else None
             )
 
-        # 每2轮更新一次策略
-        if (episode + 1) % 2 == 0:
+        # 每5轮更新一次策略
+        if (episode + 1) % 5 == 0:
             if len(combined_memory.rewards) > 0:
                 ppo_agent.update(combined_memory)
                 print(f"Ep {episode}: 策略更新完成")
-                ppo_agent.logger.info(f"Episode {episode}: 每2轮策略更新完成")
+                ppo_agent.logger.info(f"Episode {episode}: 每5轮策略更新完成")
                 # 保留之前的经验，不清空记忆
                 # combined_memory.clear_memory()  # 注释掉清空操作，保留经验
                 print(f"Ep {episode}: 保留经验记忆，当前记忆长度: {len(combined_memory.rewards)}")
@@ -1340,6 +1369,7 @@ def continue_training_ppo_agent(model_path='sifu_model/ppo_model_checkpoint.pth'
     if window_created:
         try:
             cv2.destroyWindow(window_name)
+            print("已关闭可视化窗口")
         except Exception as e:
             print(f"无法关闭可视化窗口: {e}")
 
