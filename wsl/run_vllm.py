@@ -78,7 +78,9 @@ if __name__ == "__main__":
         f"--trust-remote-code "
         f"--dtype bfloat16 "
         f"--gpu-memory-utilization 0.1 "
-        f"--max-num-batched-tokens 512"
+        f"--max-num-batched-tokens 512 "
+        f"--enable-auto-tool-choice "
+        f"--tool-call-parser auto"
     )
     
     vlm_cmd = (
