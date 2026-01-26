@@ -218,19 +218,17 @@ class MCPAICaller(QMainWindow):
         """初始化LLM和VLM服务"""
         print("[初始化] 初始化服务...")
 
-        # 动态导入本地LLM服务
+        # 动态导入本地VLM服务
         llm_spec = importlib.util.spec_from_file_location(
             "llm_class",
             os.path.join(os.path.dirname(os.path.dirname(__file__)), "llm_server", "llm_class.py")
         )
         llm_module = importlib.util.module_from_spec(llm_spec)
         llm_spec.loader.exec_module(llm_module)
-        self.LLMService = llm_module.LLMService
-        self.llm_service = self.LLMService()
 
-        # 初始化VLM服务（使用本地VLM服务）
+        # 初始化VLM服务（用于所有AI调用）
         self.VLMService = llm_module.VLMService
-        self.vlm_service = self.VLMService()  # 使用独立的VLM服务
+        self.vlm_service = self.VLMService()
 
     def _initialize_clients(self):
         """初始化MCP客户端"""
@@ -366,7 +364,6 @@ class MCPAICaller(QMainWindow):
             # 创建自我监控线程（verbose=True，输出详细日志以便调试）
             self.self_monitoring_thread = SelfMonitoringThread(
                 vlm_service=self.vlm_service,
-                llm_service=self.llm_service,
                 callback_analysis=self._on_self_monitoring_analysis,
                 callback_commentary=self._on_self_monitoring_commentary,
                 verbose=True,  # 输出详细日志以便调试
@@ -567,11 +564,11 @@ class MCPAICaller(QMainWindow):
                             memory_info += f"\n[{i+1}] 主记忆 (时间: {main_mem['metadata'].get('datetime', '未知')})\n"
                             memory_info += f"    VLM分析: {main_mem['document'][:100]}...\n"
 
-                            # 显示LLM吐槽
+                            # 显示吐槽（由VLM生成）
                             commentary_id = main_mem['id'].replace('mem_', 'roast_')
                             related_commentary = [m for m in memories if 'id' in m and m['id'] == commentary_id]
                             if related_commentary:
-                                memory_info += f"    LLM吐槽: {related_commentary[0]['document'][:100]}...\n"
+                                memory_info += f"    吐槽: {related_commentary[0]['document'][:100]}...\n"
 
                             # 显示用户输入
                             if mem['user_inputs']:
@@ -677,10 +674,10 @@ class MCPAICaller(QMainWindow):
             self.add_caption_line(f"[错误] {error_msg}")
 
     def _send_user_input_to_llm(self, input_text):
-        """将用户输入发送给LLM处理"""
+        """将用户输入发送给VLM处理"""
         import time
         start_time = time.time()
-        print(f"[LLM] 处理用户输入: {input_text[:30]}...")
+        print(f"[VLM] 处理用户输入: {input_text[:30]}...")
         
         # 将用户输入添加到对话历史
         self.conversation_history.append({
@@ -688,7 +685,7 @@ class MCPAICaller(QMainWindow):
             'content': input_text
         })
         
-        # 构建messages格式，用于LLM服务
+        # 构建messages格式，用于VLM服务
         messages = []
         
         # 添加系统消息
@@ -702,19 +699,19 @@ class MCPAICaller(QMainWindow):
         for item in recent_history:
             messages.append(item)
         
-        # 调用LLM服务
+        # 调用VLM服务
         try:
-            llm_start_time = time.time()
-            response = self.llm_service.create(messages)
-            llm_elapsed_time = time.time() - llm_start_time
-            print(f"[LLM] 调用完成，耗时: {llm_elapsed_time:.2f}秒")
+            vlm_start_time = time.time()
+            response = self.vlm_service.create_with_image(messages, image_source=None)
+            vlm_elapsed_time = time.time() - vlm_start_time
+            print(f"[VLM] 调用完成，耗时: {vlm_elapsed_time:.2f}秒")
             
             if response:
                 # 提取回复内容
                 content = response['choices'][0]['message']['content']
-                print(f"[LLM] 生成回复完成: {content[:30]}...")
+                print(f"[VLM] 生成回复完成: {content[:30]}...")
                 
-                # 将LLM回复添加到对话历史
+                # 将VLM回复添加到对话历史
                 self.conversation_history.append({
                     'role': 'assistant',
                     'content': content
@@ -723,17 +720,17 @@ class MCPAICaller(QMainWindow):
                 # 显示在主窗口中
                 self.add_caption_line(f"[AI] {content}")
         except Exception as e:
-            print(f"[错误] 调用LLM服务失败: {e}")
+            print(f"[错误] 调用VLM服务失败: {e}")
             self.add_caption_line(f"[错误] 处理请求失败: {e}")
         finally:
             total_elapsed_time = time.time() - start_time
-            print(f"[LLM处理] 完成，总耗时: {total_elapsed_time:.2f}秒")
+            print(f"[VLM处理] 完成，总耗时: {total_elapsed_time:.2f}秒")
 
     def _send_user_input_to_llm_with_tools(self, input_text):
-        """将用户输入发送给LLM处理（支持 function calling）"""
+        """将用户输入发送给VLM处理（支持 function calling）"""
         import time
         start_time = time.time()
-        print(f"[LLM] 处理用户输入（带工具）: {input_text[:30]}...")
+        print(f"[VLM] 处理用户输入（带工具）: {input_text[:30]}...")
 
         # 检查工具列表是否已加载
         if not self.tools_loaded_once or len(self.tools_list) == 0:
@@ -762,12 +759,12 @@ class MCPAICaller(QMainWindow):
             'content': input_text
         })
 
-        # 将用户输入添加到自我监控线程的历史记录中，以便吐槽llm能够使用
+        # 将用户输入添加到自我监控线程的历史记录中，以便吐槽vlm能够使用
         if hasattr(self, 'self_monitoring_thread') and self.self_monitoring_thread:
             self.self_monitoring_thread.add_user_input(input_text)
             print(f"[用户输入] 已添加到自我监控线程历史记录: {input_text[:30]}...")
 
-        # 构建messages格式，用于LLM服务
+        # 构建messages格式，用于VLM服务
         messages = []
 
         # 读取knowledge.txt文件
@@ -808,7 +805,7 @@ class MCPAICaller(QMainWindow):
         for item in recent_history:
             messages.append(item)
 
-        # 调用LLM服务（添加循环处理，支持多轮工具调用）
+        # 调用VLM服务（添加循环处理，支持多轮工具调用）
         max_rounds = 10  # 最大循环轮数
         current_round = 0
         
@@ -828,10 +825,10 @@ class MCPAICaller(QMainWindow):
                 for item in recent_history:
                     messages.append(item)
                 
-                llm_start_time = time.time()
-                response = self.llm_service.create(messages, tools=tools)
-                llm_elapsed_time = time.time() - llm_start_time
-                print(f"[LLM] 调用完成，耗时: {llm_elapsed_time:.2f}秒")
+                vlm_start_time = time.time()
+                response = self.vlm_service.create_with_image(messages, image_source=None, tools=tools)
+                vlm_elapsed_time = time.time() - vlm_start_time
+                print(f"[VLM] 调用完成，耗时: {vlm_elapsed_time:.2f}秒")
                 
                 if response:
                     # 提取回复内容
@@ -839,7 +836,7 @@ class MCPAICaller(QMainWindow):
 
                     # 检查是否有工具调用
                     if 'tool_calls' in assistant_message and assistant_message['tool_calls']:
-                        print(f"[LLM] 检测到工具调用: {len(assistant_message['tool_calls'])} 个")
+                        print(f"[VLM] 检测到工具调用: {len(assistant_message['tool_calls'])} 个")
 
                         # 处理工具调用
                         tool_results = self._execute_tool_calls(assistant_message['tool_calls'])
@@ -863,9 +860,9 @@ class MCPAICaller(QMainWindow):
                     else:
                         # 普通文本回复，任务完成
                         content = assistant_message.get('content', '')
-                        print(f"[LLM] 生成回复完成: {content[:30]}...")
+                        print(f"[VLM] 生成回复完成: {content[:30]}...")
 
-                        # 将LLM回复添加到对话历史
+                        # 将VLM回复添加到对话历史
                         self.conversation_history.append({
                             'role': 'assistant',
                             'content': content
@@ -877,25 +874,25 @@ class MCPAICaller(QMainWindow):
                         # 任务完成，退出循环
                         break
             except Exception as e:
-                print(f"[错误] 调用LLM服务失败: {e}")
+                print(f"[错误] 调用VLM服务失败: {e}")
                 self.add_caption_line(f"[错误] 处理请求失败: {e}")
                 break
         
         if current_round >= max_rounds:
             self.add_caption_line(f"[AI] 已达到最大处理轮数，任务可能未完成")
         
-        # 触发吐槽llm生成回复，传递工具列表和对话历史
+        # 触发吐槽vlm生成回复，传递工具列表和对话历史
         if hasattr(self, 'self_monitoring_thread') and self.self_monitoring_thread:
             # 调用自我监控线程的方法生成吐槽，传递工具列表和对话历史
             try:
                 # 检查self_monitoring_thread是否有_generate_commentary方法
                 if hasattr(self.self_monitoring_thread, '_generate_commentary'):
-                    # 传递工具列表和对话历史给吐槽llm
+                    # 传递工具列表和对话历史给吐槽vlm
                     self.self_monitoring_thread._generate_commentary(
                         conversation_history=self.conversation_history,
                         tools=tools
                     )
-                    print("[吐槽] 已触发吐槽llm生成回复，支持function calling")
+                    print("[吐槽] 已触发吐槽vlm生成回复，支持function calling")
             except Exception as e:
                 print(f"[错误] 触发吐槽失败: {e}")
         
@@ -1015,7 +1012,7 @@ class MCPAICaller(QMainWindow):
             print(f"[工具调用] 全部执行完成，总耗时: {total_elapsed_time:.2f}秒")
 
     def _get_llm_summary_for_tool_result(self, tool_name, tool_result):
-        """获取 LLM 对工具执行结果的总结并返回"""
+        """获取 VLM 对工具执行结果的总结并返回"""
         try:
             # 构建系统消息
             system_prompt = "你是一个智能助手，请简要总结工具执行的结果。"
@@ -1028,15 +1025,15 @@ class MCPAICaller(QMainWindow):
                 }
             ]
 
-            # 调用LLM服务
-            response = self.llm_service.create(messages)
+            # 调用VLM服务
+            response = self.vlm_service.create_with_image(messages, image_source=None)
 
             if response:
                 summary = response['choices'][0]['message']['content']
                 try:
-                    print(f"[LLM] 工具结果总结: {summary[:50]}...")
+                    print(f"[VLM] 工具结果总结: {summary[:50]}...")
                 except UnicodeEncodeError:
-                    print(f"[LLM] 工具结果总结: {repr(summary[:50])}...")
+                    print(f"[VLM] 工具结果总结: {repr(summary[:50])}...")
 
                 # 显示在主窗口中
                 self.add_caption_line(f"[AI] {summary}")
@@ -1112,7 +1109,7 @@ class MCPAICaller(QMainWindow):
         Args:
             memory_id: 记忆ID
             vlm_analysis: VLM分析结果
-            llm_commentary: LLM吐槽
+            llm_commentary: 吐槽内容（由VLM生成）
         """
         if hasattr(self, 'memory_window') and self.memory_window:
             # 由于我们已经禁用了记忆保存，这里不再记录

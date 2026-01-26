@@ -34,13 +34,12 @@ except ImportError:
 class SelfMonitoringThread(threading.Thread):
     """自我监控线程 - 自动截图、VLM分析和吐槽生成"""
 
-    def __init__(self, vlm_service, llm_service, callback_analysis=None, callback_commentary=None, verbose=False, enable_memory=False, enable_memory_retrieval=False, callback_memory_retrieved=None, callback_memory_saved=None, callback_hide_windows=None, callback_show_windows=None, blocked_windows=None):
+    def __init__(self, vlm_service, callback_analysis=None, callback_commentary=None, verbose=False, enable_memory=False, enable_memory_retrieval=False, callback_memory_retrieved=None, callback_memory_saved=None, callback_hide_windows=None, callback_show_windows=None, blocked_windows=None):
         """
         初始化自我监控线程
 
         Args:
-            vlm_service: VLM服务实例
-            llm_service: LLM服务实例
+            vlm_service: VLM服务实例（用于所有AI调用）
             callback_analysis: VLM分析结果回调函数
             callback_commentary: 吐槽结果回调函数
             verbose: 是否输出详细日志到控制台
@@ -54,7 +53,6 @@ class SelfMonitoringThread(threading.Thread):
         """
         super().__init__(daemon=True)
         self.vlm_service = vlm_service
-        self.llm_service = llm_service
         self.callback_analysis = callback_analysis
         self.callback_commentary = callback_commentary
         self.callback_memory_retrieved = callback_memory_retrieved
@@ -356,6 +354,10 @@ class SelfMonitoringThread(threading.Thread):
                                 # 9. 清空历史记录
                                 self.vlm_analysis_history = []
                                 self.user_input_history = []  # 同时清空用户输入历史
+
+                                # 10. 吐槽结束后等待5秒
+                                self._log("[自我监控] 吐槽结束，等待5秒后继续")
+                                time.sleep(5)
                             else:
                                 self._log("[自我监控] 截图失败，跳过本次周期")
 
@@ -583,57 +585,8 @@ class SelfMonitoringThread(threading.Thread):
 
         for attempt in range(max_retries):
             try:
-                # 构建VLM提示词 - 简短对话提取
-                prompt = """请简要分析这5张截图，只返回一个综合结果：
-
-如果是游戏/对话场景：
-- 如果有对话，提取对话（角色A：对话内容 / 角色B：对话内容）
-- 如果没有对话，概括场景（20字以内）
-- 忽略所有工具窗口、UI元素、字幕和分析结果
-- 不要分析工具、不要分析环境
-- 不要分析蓝色的、黄色的和绿色的字
-
-如果是工作场景（建模/办公/开发）：
-- 识别软件类型和当前操作
-- 20字以内概括当前状态
-- 重点描述用户正在进行的具体操作
-- 不要分析蓝色的和黄色的字
-
-重要要求：
-- 只返回一个综合结果，不要分别分析每张图
-- 严格控制在30字以内
-- 对话只提取文本，不添加任何描述
-- 不要多余的标点符号"""
-
-                # 调用VLM分析
-                vlm_messages = [{"role": "user", "content": prompt}]
-
-                # 尝试使用多图分析
-                try:
-                    if attempt > 0:
-                        self._log(f"[VLM] 第{attempt+1}次重试...")
-
-                    vlm_start_time = time.time()
-                    vlm_result = self.vlm_service.create_with_multiple_images(
-                        vlm_messages,
-                        image_sources=screenshots
-                    )
-                    vlm_elapsed_time = time.time() - vlm_start_time
-                    self._log(f"[VLM] 多图分析完成，耗时: {vlm_elapsed_time:.2f}秒")
-
-                    # 提取分析结果
-                    analysis_text = self._extract_content_from_vlm_result(vlm_result)
-
-                    if analysis_text:
-                        self._log(f"[VLM] 分析成功 (第{attempt+1}次尝试)")
-                        return analysis_text
-                    else:
-                        raise ValueError("VLM返回空结果")
-
-                except AttributeError:
-                    # 如果不支持多图分析，fallback到单图分析（使用最后一张）
-                    self._log("[VLM] 不支持多图分析，使用最后一张截图分析")
-                    single_prompt = """简要描述这个截图（20字以内）：
+                # 只使用最后一张截图进行分析
+                single_prompt = """简要描述这个截图（20字以内）：
 
 对话场景只提取对话内容，工作场景只说明在做什么
 
@@ -644,21 +597,24 @@ class SelfMonitoringThread(threading.Thread):
 - 严格控制在20字以内
 - 直接描述，不要多余的标点符号"""
 
-                    vlm_start_time = time.time()
-                    vlm_result = self.vlm_service.create_with_image(
-                        [{"role": "user", "content": single_prompt}],
-                        image_source=screenshots[-1]
-                    )
-                    vlm_elapsed_time = time.time() - vlm_start_time
-                    self._log(f"[VLM] 单图分析完成，耗时: {vlm_elapsed_time:.2f}秒")
+                if attempt > 0:
+                    self._log(f"[VLM] 第{attempt+1}次重试...")
 
-                    analysis_text = self._extract_content_from_vlm_result(vlm_result)
+                vlm_start_time = time.time()
+                vlm_result = self.vlm_service.create_with_image(
+                    [{"role": "user", "content": single_prompt}],
+                    image_source=screenshots[-1]
+                )
+                vlm_elapsed_time = time.time() - vlm_start_time
+                self._log(f"[VLM] 单图分析完成，耗时: {vlm_elapsed_time:.2f}秒")
 
-                    if analysis_text:
-                        self._log(f"[VLM] 分析成功 (第{attempt+1}次尝试)")
-                        return analysis_text
-                    else:
-                        raise ValueError("VLM返回空结果")
+                analysis_text = self._extract_content_from_vlm_result(vlm_result)
+
+                if analysis_text:
+                    self._log(f"[VLM] 分析成功 (第{attempt+1}次尝试)")
+                    return analysis_text
+                else:
+                    raise ValueError("VLM返回空结果")
 
             except (ConnectionError, ConnectionResetError, requests.exceptions.ConnectionError,
                     requests.exceptions.SSLError, urllib3.exceptions.ProtocolError) as e:
@@ -884,8 +840,8 @@ class SelfMonitoringThread(threading.Thread):
             
             for attempt in range(max_retries):
                 try:
-                    # 支持function calling
-                    llm_result = self.llm_service.create([{"role": "user", "content": commentary_prompt}], tools=tools)
+                    # 使用VLM服务进行文本生成
+                    llm_result = self.vlm_service.create_with_image([{"role": "user", "content": commentary_prompt}], tools=tools)
                     
                     # 检查是否有工具调用
                     if llm_result and 'choices' in llm_result and llm_result['choices']:

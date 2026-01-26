@@ -295,6 +295,91 @@ def test_vlm_direct_image_content():
             os.unlink(test_image_path)
 
 
+def test_vlm_with_tools():
+    """测试 VLM 带工具调用"""
+    print("=== 测试 VLM 带工具调用 ===")
+    
+    # 初始化 VLM 服务
+    vlm_service = VLMService()
+    
+    # 创建测试图像
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+        test_image_path = tmp.name
+    
+    try:
+        create_test_image(test_image_path)
+        
+        # 准备测试消息
+        messages = [
+            {
+                "role": "user",
+                "content": "请分析这张图片，并告诉我图片中有哪些颜色"
+            }
+        ]
+        
+        # 定义工具
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "analyze_colors",
+                    "description": "分析图片中的颜色信息",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "colors": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "图片中识别到的颜色列表"
+                            }
+                        },
+                        "required": ["colors"]
+                    }
+                }
+            }
+        ]
+        
+        # 调用 VLM 服务
+        try:
+            response = vlm_service.create_with_image(messages, image_source=test_image_path, tools=tools)
+            
+            # 打印响应结果
+            print("响应状态: 成功")
+            
+            # 提取并打印生成的内容
+            choices = response.get('choices', [])
+            if choices:
+                message = choices[0].get('message', {})
+                content = message.get('content', '无内容')
+                tool_calls = message.get('tool_calls', [])
+                
+                if tool_calls:
+                    print(f"工具调用: {tool_calls[0].get('function', {}).get('name', '未知')}")
+                    print(f"参数: {tool_calls[0].get('function', {}).get('arguments', '无')}")
+                else:
+                    print(f"生成内容: {content[:200]}..." if len(content) > 200 else f"生成内容: {content}")
+            
+            print("带工具调用测试完成\n")
+            return True
+        except Exception as e:
+            error_msg = str(e)
+            if "enable-auto-tool-choice" in error_msg:
+                print("⚠️  工具调用功能未启用")
+                print("提示: 如需启用工具调用，请在启动 VLM 服务器时添加以下参数:")
+                print("  --enable-auto-tool-choice --tool-call-parser")
+                print("工具调用测试已跳过（这是正常的，如果不需要工具调用功能）\n")
+                return True
+            else:
+                print(f"带工具调用测试失败: {error_msg}")
+                return False
+    finally:
+        # 清理测试图像
+        if os.path.exists(test_image_path):
+            os.unlink(test_image_path)
+
+
 if __name__ == "__main__":
     print("开始测试 VLM 服务...\n")
     
@@ -303,7 +388,8 @@ if __name__ == "__main__":
         "单图像识别": test_vlm_single_image(),
         "多图像识别": test_vlm_multiple_images(),
         "多轮对话": test_vlm_multimodal_conversation(),
-        "直接图像内容格式": test_vlm_direct_image_content()
+        "直接图像内容格式": test_vlm_direct_image_content(),
+        "带工具调用": test_vlm_with_tools()
     }
     
     # 打印测试结果

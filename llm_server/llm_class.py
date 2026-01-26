@@ -18,8 +18,8 @@ VLM_DIR = f"/root/my_python_server/models/OpenBMB_MiniCPM-V-2_6-int4"
 
 class LLMService:
     def __init__(self):
-        # 使用 WSL 本地服务
-        self.api_url = 'http://localhost:8000/v1'
+        # 使用 WSL 本地服务 - 只有8001端口可用
+        self.api_url = 'http://localhost:8001/v1'
         self.model_name = LLM_DIR
         self.api_key = 'sk-xxx'  # 本地服务不需要真实 API 密钥
 
