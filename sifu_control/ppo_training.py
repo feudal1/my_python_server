@@ -65,6 +65,9 @@ def remove_black_borders(image, threshold=10):
     return resized
 
 # 设置中文字体支持
+
+
+
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体字
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 from control_api_tool import ImprovedMovementController  # 导入移动控制器
@@ -205,7 +208,7 @@ class TargetSearchEnvironment:
         加载YOLO模型
         """
         current_dir = Path(__file__).parent
-        model_path = current_dir.parent / "models" / "find_gate.pt"
+        model_path = current_dir.parent / "my_models" / "find_gate.pt"
         
         if not model_path.exists():
             self.logger.error(f"YOLO模型文件不存在: {model_path}")
