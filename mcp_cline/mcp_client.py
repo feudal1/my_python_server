@@ -55,7 +55,7 @@ class MCPClient:
             },
             'memory-tool': {
                 'command': sys.executable,
-                'args': [os.path.join(project_root, 'my_python_server',  'tools', 'memory_tool', 'memory_api_tool.py')],
+                'args': [os.path.join(project_root, 'my_python_server',  'memory', 'memory_api_tool.py')],
                 'description': '记忆管理工具服务器'
             }
         }

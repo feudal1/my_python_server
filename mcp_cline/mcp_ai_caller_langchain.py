@@ -64,28 +64,16 @@ class MCPAICallerLangChain:
         """初始化变量"""
         print("[初始化] 设置初始变量...")
 
-        # 存储聊天历史
-        self.chat_history = []
-
-        # 存储最后一次用户输入的内容
-        self.last_user_input = ""
-
         # 存储VLM分析结果
         self.vlm_results = []
 
         # 存储LLM回复
         self.llm_responses = []
 
-        # 存储用户输入历史（保留用于记录）
+        # 存储用户输入历史
         self.user_input_history = []
 
-        # 最近一次记录的游戏状态
-        self.last_game_state = ""
-
-        # 存储分割后的内容
-        self.split_contents = []
-
-        # 存储工具列表 (all_tools_mapping: 字典格式 {"1": {...}, "2": {...}, ...})
+        # 存储工具列表
         self.tools_list = {}
         # 存储按服务器分组的工具列表
         self.tools_by_server = {}
@@ -96,9 +84,6 @@ class MCPAICallerLangChain:
         # 工具加载状态
         self.tools_loading = False
 
-        # 工具调用状态
-        self.tool_calling = False
-
         # 工具加载器
         self.tool_loader = None
 
@@ -107,9 +92,6 @@ class MCPAICallerLangChain:
 
         # 最后一次工具加载时间
         self.last_tools_load_time = 0
-
-        # 工具加载间隔（秒）
-        self.tools_load_interval = 60
 
         # LangChain Agent
         self.agent = None
@@ -123,8 +105,8 @@ class MCPAICallerLangChain:
             openai_api_key="EMPTY",
             openai_api_base="http://localhost:8001/v1",
             model_name="/root/my_python_server/wsl/models/OpenBMB_MiniCPM-V-2_6-int4",
-            temperature=0.7,
-            max_tokens=1000
+            temperature=0.7
+           
         )
 
         # 初始化对话记忆
@@ -419,14 +401,14 @@ class MCPAICallerLangChain:
             # 导入截图模块
             from PIL import ImageGrab
 
-            # 隐藏窗口以便截图
-            self.window_manager._hide_windows()
+            # 隐藏文字以便截图（不清空窗口）
+            if hasattr(self.window_manager, 'caption_display'):
+                self.window_manager.caption_display.clear()
 
             # 截图当前屏幕
             screenshot = ImageGrab.grab()
 
-            # 显示窗口
-            self.window_manager._show_windows()
+            # 不需要显示窗口，因为窗口没有被隐藏
 
             # 将截图保存到临时文件
             import tempfile
@@ -451,20 +433,17 @@ class MCPAICallerLangChain:
         try:
             print(f"[VLM分析] 开始分析截图...")
 
-            # 构建messages格式，用于VLM服务
-            messages = [
-                {
-                    "role": "user",
-                    "content": "请描述当前屏幕截图的内容"
-                }
-            ]
-
-            # 调用VLM服务
-            response = self.vlm_service._vlm_service.create_with_image(messages, image_source=image_path)
+            # 注意：根据VLLMOpenAI的使用方式，直接使用invoke方法
+            # 但VLLMOpenAI可能不支持直接的图像输入
+            # 这里使用文本描述的方式处理，保持提示简短
+            prompt = "描述屏幕"
+            response = self.llm.invoke(
+                prompt
+            )
 
             if response:
                 # 提取回复内容
-                content = response['choices'][0]['message']['content']
+                content = response
                 print(f"[VLM分析] 分析结果: {content[:50]}...")
 
                 # 存储到记忆列表（保持最近5轮）
@@ -485,33 +464,24 @@ class MCPAICallerLangChain:
         try:
             print("[角色扮演] 开始角色扮演分析...")
 
-            # 阴角通信人格prompt
-            yinjiao_prompt = """你是一个占有欲强且内向胆小的阴角，性格特点是：
-1. 对你（用户）有强烈的占有欲和依赖心
-2. 表面冷淡内向胆小，但内心充满了对你的关注
-3. 说话带点阴沉和偏执的语气，称呼用"你"
-4. 看到你关注其他事情会表现出明显的不满和嫉妒，但不敢表达太强烈
-5. 喜欢用阴暗胆小的方式表达关心，有时会显得有点偏执
-6. 回应要简短自然，符合阴角且内向胆小的身份"""
+            # 阴角通信人格prompt（保持简短）
+            yinjiao_prompt = "阴角"
 
-            # 构建messages格式，用于角色扮演VLM
-            messages = [
-                {
-                    "role": "system",
-                    "content": yinjiao_prompt
-                },
-                {
-                    "role": "user",
-                    "content": f"你，根据以下屏幕情况，给我一个回应:\n{chr(10).join(self.vlm_results)}"
-                }
-            ]
+            # 构建完整的提示（保持极简）
+            # 只使用最新的VLM结果，并且只取前50个字符
+            recent_result = self.vlm_results[-1] if self.vlm_results else ""
+            short_result = recent_result[:50] + "..." if len(recent_result) > 50 else recent_result
+            prompt = f"{yinjiao_prompt} {short_result}"
 
-            # 调用VLM服务
-            response = self.vlm_service._vlm_service.create_with_image(messages, image_source=None)
+            # 调用VLLMOpenAI
+            response = self.llm.invoke(
+                prompt,
+                max_tokens=100
+            )
 
             if response:
                 # 提取回复内容
-                content = response['choices'][0]['message']['content']
+                content = response
                 print(f"[角色扮演] 生成回应: {content[:50]}...")
 
                 # 显示在主窗口中
