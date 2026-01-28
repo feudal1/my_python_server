@@ -306,40 +306,18 @@ class MCPAICallerLangChain:
         if not input_text:
             return
 
-        # 处理命令
-        if input_text.startswith('/'):
-            command = input_text[1:].lower()
-            if command == 'h':
-                # 打开工具窗口显示工具列表
-                self.open_tools_window()
-                self.window_manager.add_caption_line(f"[命令] 打开工具窗口")
-            elif command.startswith('r '):
-                # /r 命令：直接发送给 LLM 执行
-                query = command[2:].strip()
-                if query:
-                    # 使用LangChain对话链处理
-                    self._process_with_conversation_chain(query)
-                else:
-                    self.window_manager.add_caption_line(f"[命令] 用法: /r <问题描述>")
-            elif command == 'clear':
-                # 清空对话记忆
-                self.memory.clear()
-                self.window_manager.add_caption_line(f"[命令] 对话记忆已清空")
-            else:
-                self.window_manager.add_caption_line(f"[命令] 未知命令: {input_text}")
-        else:
-            # 处理普通文本输入
-            self.window_manager.add_caption_line(f"[你] {input_text}")
+        # 处理所有输入通过LangChain
+        self.window_manager.add_caption_line(f"[你] {input_text}")
 
-            # 将用户输入添加到用户输入历史中
-            self.user_input_history.append(input_text)
-            
-            # 使用LangChain对话链处理
-            self._process_with_conversation_chain(input_text)
-            print(f"[用户输入] 已添加到历史记录: {input_text[:30]}...")
+        # 将用户输入添加到用户输入历史中
+        self.user_input_history.append(input_text)
+        
+        # 使用LangChain对话链处理
+        self._process_with_conversation_chain(input_text)
+        print(f"[用户输入] 已添加到历史记录: {input_text[:30]}...")
 
     def _process_with_conversation_chain(self, query):
-        """使用LangChain对话链处理用户输入"""
+        """使用LangChain处理用户输入（等待Agent构建完成）"""
         import time
         start_time = time.time()
         print(f"[LangChain] 处理用户输入: {query[:30]}...")
@@ -348,11 +326,53 @@ class MCPAICallerLangChain:
         self.window_manager.lifecycle_signal.emit('start', query)
 
         try:
-            # 使用对话链处理查询
-            response = self.conversation_chain.invoke({"input": query})
+            # 检查Agent是否已构建
+            if not self.agent:
+                print("[LangChain] Agent未构建，等待构建完成...")
+                
+                # 显示等待信息
+                self.window_manager.add_caption_line("[系统] 工具正在加载中，请稍候...")
+                
+                # 如果工具还未开始加载，触发加载
+                if not self.tools_loading and not self.tools_loaded_once:
+                    print("[LangChain] 触发工具加载...")
+                    self.async_refresh_tools_list()
+                
+                # 等待Agent构建完成（最多等待30秒）
+                wait_time = 0
+                while not self.agent and wait_time < 30:
+                    time.sleep(1)
+                    wait_time += 1
+                    print(f"[LangChain] 等待Agent构建，{wait_time}秒...")
+                
+                # 检查是否构建成功
+                if not self.agent:
+                    print("[LangChain] Agent构建超时，使用对话链处理")
+                    # 使用对话链处理查询
+                    response = self.conversation_chain.invoke({"input": query})
 
-            # 更新对话记忆
-            self.memory.save_context({"input": query}, {"output": response})
+                    # 更新对话记忆
+                    self.memory.save_context({"input": query}, {"output": response})
+                else:
+                    print("[LangChain] Agent构建完成，使用Agent处理")
+                    # 运行Agent
+                    response = self.agent(query, self.conversation_history)
+                    
+                    # 将回复添加到对话历史
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+            else:
+                print("[LangChain] 使用Agent处理")
+                # 运行Agent
+                response = self.agent(query, self.conversation_history)
+                
+                # 将回复添加到对话历史
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": response
+                })
 
             # 触发文本结束事件
             self.window_manager.text_end_signal.emit(response)
@@ -384,55 +404,7 @@ class MCPAICallerLangChain:
             # 触发生命周期结束事件
             self.window_manager.lifecycle_signal.emit('end', f"处理完成，耗时: {total_elapsed_time:.2f}秒")
 
-    def _process_with_agent(self, query):
-        """使用LangChain Agent处理用户输入"""
-        import time
-        start_time = time.time()
-        print(f"[LangChain] 处理用户输入: {query[:30]}...")
 
-        # 检查Agent是否已构建
-        if not self.agent:
-            self.window_manager.add_caption_line("[错误] Agent尚未构建，请等待工具加载完成")
-            return
-
-        # 触发生命周期开始事件
-        self.window_manager.lifecycle_signal.emit('start', query)
-
-        try:
-            # 运行Agent
-            output = self.agent(query, self.conversation_history)
-            print(f"[LangChain] 生成回复完成: {output[:30]}...")
-
-            # 触发文本结束事件
-            self.window_manager.text_end_signal.emit(output)
-
-            # 将回复添加到对话历史
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": output
-            })
-
-            # 触发消息结束事件
-            self.window_manager.message_end_signal.emit('assistant')
-
-            # 显示在主窗口中
-            self.window_manager.add_caption_line(f"[AI] {output}")
-
-        except Exception as e:
-            print(f"[错误] Agent执行失败: {e}")
-            import traceback
-            traceback.print_exc()
-            self.window_manager.add_caption_line(f"[错误] 处理请求失败: {e}")
-
-            # 触发生命周期错误事件
-            self.window_manager.lifecycle_signal.emit('error', str(e))
-
-        finally:
-            total_elapsed_time = time.time() - start_time
-            print(f"[/r命令] 处理完成，总耗时: {total_elapsed_time:.2f}秒")
-
-            # 触发生命周期结束事件
-            self.window_manager.lifecycle_signal.emit('end', f"处理完成，耗时: {total_elapsed_time:.2f}秒")
 
     def auto_record_game_state(self):
         """自动记录游戏状态"""

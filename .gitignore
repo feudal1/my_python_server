@@ -24,7 +24,7 @@ exe_output/*
 *screenshot*png
 *sifu_window_capture.png
 *.spec
-*build*
+build*
 *dist*
 my_python_server_private*
 *map_export*
