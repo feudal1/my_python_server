@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-记忆工具MCP服务器 - 提供AI读写记忆的能力
+记忆工具API - 提供AI读写记忆的能力
 
 支持功能：
 - read_memory: 读取记忆文档
@@ -20,19 +20,15 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 from memory_manager import MemoryManager
-from mcp.server.fastmcp import FastMCP
-
-# 使用FastMCP创建服务器
-mcp = FastMCP("memory-tool")
 
 # 初始化记忆管理器
 # 获取项目根目录
 base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 memory_manager = MemoryManager(base_dir)
-print(f"[记忆服务器] 初始化完成，基础目录: {base_dir}")
+print(f"[记忆管理] 初始化完成，记忆目录: {base_dir}\memory")
 
-@mcp.tool()
-async def read_memory(memory_type: str = 'general'):
+
+def read_memory(memory_type: str = 'general'):
     """
     读取记忆文档
     
@@ -45,8 +41,8 @@ async def read_memory(memory_type: str = 'general'):
     content = memory_manager.read_memory(memory_type)
     return f"记忆内容 ({memory_type}):\n\n{content}"
 
-@mcp.tool()
-async def write_memory(content: str, memory_type: str = 'general', append: bool = True):
+
+def write_memory(content: str, memory_type: str = 'general', append: bool = True):
     """
     写入记忆文档
     
@@ -63,8 +59,8 @@ async def write_memory(content: str, memory_type: str = 'general', append: bool 
     
     return memory_manager.write_memory(content, memory_type, append)
 
-@mcp.tool()
-async def search_memory(query: str, memory_type: str = 'general', max_results: int = 5):
+
+def search_memory(query: str, memory_type: str = 'general', max_results: int = 5):
     """
     搜索记忆文档
     
@@ -94,8 +90,8 @@ async def search_memory(query: str, memory_type: str = 'general', max_results: i
     
     return output
 
-@mcp.tool()
-async def grep_memory(pattern: str, memory_type: str = 'general', context_lines: int = 2):
+
+def grep_memory(pattern: str, memory_type: str = 'general', context_lines: int = 2):
     """
     在记忆文档中搜索模式（类似grep命令）
     
@@ -125,8 +121,8 @@ async def grep_memory(pattern: str, memory_type: str = 'general', context_lines:
     
     return output
 
-@mcp.tool()
-async def clear_memory(memory_type: str = 'general'):
+
+def clear_memory(memory_type: str = 'general'):
     """
     清空记忆文档
     
@@ -138,8 +134,8 @@ async def clear_memory(memory_type: str = 'general'):
     """
     return memory_manager.clear_memory(memory_type)
 
-@mcp.tool()
-async def get_memory_stats(memory_type: str = 'general'):
+
+def get_memory_stats(memory_type: str = 'general'):
     """
     获取记忆统计信息
     
@@ -160,5 +156,13 @@ async def get_memory_stats(memory_type: str = 'general'):
     
     return output
 
+
 if __name__ == "__main__":
-    mcp.run()
+    print("记忆工具API模块")
+    print("可用函数:")
+    print("- read_memory(memory_type='general')")
+    print("- write_memory(content, memory_type='general', append=True)")
+    print("- search_memory(query, memory_type='general', max_results=5)")
+    print("- grep_memory(pattern, memory_type='general', context_lines=2)")
+    print("- clear_memory(memory_type='general')")
+    print("- get_memory_stats(memory_type='general')")

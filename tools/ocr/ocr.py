@@ -15,7 +15,6 @@ import base64
 from datetime import datetime
 import win32gui
 import win32con
-from mcp.server.fastmcp import FastMCP
 import time
 import re
 
@@ -24,13 +23,6 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 if sys.stderr.encoding != 'utf-8':
     sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf-8', buffering=1)
-
-# 禁用所有print语句，以确保MCP服务器只输出JSON格式的消息
-import builtins
-original_print = builtins.print
-def silent_print(*args, **kwargs):
-    pass
-builtins.print = silent_print
 
 # 总是导入 pytesseract 作为备用
 import pytesseract
@@ -45,8 +37,6 @@ except ImportError:
     EASYOCR_AVAILABLE = False
 except Exception as e:
     EASYOCR_AVAILABLE = False
-
-mcp = FastMCP("ocr_tools")
 
 
 def image_to_base64(image: Image.Image) -> str:
@@ -391,7 +381,6 @@ def capture_screen_region(left: int = None, top: int = None, right: int = None, 
     return image
 
 
-@mcp.tool()
 def find_text_coordinates(text_to_find: str, image_path: str = None,
                          left: int = None, top: int = None,
                          right: int = None, bottom: int = None):

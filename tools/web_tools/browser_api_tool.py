@@ -6,15 +6,13 @@
 import sys
 import webbrowser
 import time
-from mcp.server.fastmcp import FastMCP
- 
-mcp = FastMCP("blender_tools")
-@mcp.tool()
+
+
 def openURL(url):
     """
     标准化URL格式，处理可能的错误格式
     """
-    # 如果URL包含"="，可能是在"="后面才是真正的URL
+    # 如果URL包含"=",可能是在"="后面才是真正的URL
     if '=' in url:
         parts = url.split('=', 1)
         if len(parts) > 1:
@@ -29,7 +27,15 @@ def openURL(url):
         url = 'https://' + url
     webbrowser.open(url)
     
-    return print(f"成功 打开网页: {url}") 
+    result = f"成功 打开网页: {url}"
+    print(result)
+    return result
 
 if __name__ == '__main__':
-    mcp.run()
+    print("打开浏览器工具")
+    print("可用函数:")
+    print("- openURL(url)")
+    # 测试
+    if len(sys.argv) > 1:
+        url = sys.argv[1]
+        openURL(url)

@@ -1,14 +1,12 @@
-# e:\code\my_python_server\yolo\detect_like_favorite.py
+# e:\code\my_python_server\tools\yolo\detect_like_favorite.py
 import os
 import cv2
 import numpy as np
 from ultralytics import YOLO
 from pathlib import Path
 from PIL import ImageGrab
-from mcp.server.fastmcp import FastMCP
-mcp = FastMCP("likefavarite_tools")
 
-@mcp.tool()
+
 def detect_like_favorite():
     """
     检测点赞和收藏按钮
@@ -102,4 +100,6 @@ def detect_like_favorite():
 
 
 if __name__ == '__main__':
-    mcp.run()
+    print("检测点赞和收藏按钮")
+    result = detect_like_favorite()
+    print(result)

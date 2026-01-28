@@ -12,10 +12,8 @@ import time
 
 # 禁用pyautogui的安全限制（在生产环境中请谨慎使用）
 pyautogui.FAILSAFE = False
-from mcp.server.fastmcp import FastMCP
- 
-mcp = FastMCP("computer_tools")
-@mcp.tool()
+
+
 def click_mouse(x=None, y=None, click_type='left', clicks=1, interval=0.0):
     """
     鼠标点击操作
@@ -49,7 +47,7 @@ def move_mouse(x, y, duration=0.0):
         return f"移动鼠标成功: ({x}, {y})"
     except Exception as e:
         return f"移动鼠标失败: {str(e)}"
-@mcp.tool()
+
 def scroll_mouse(units, x, y):
     """
     鼠标滚轮滚动操作，必须指定坐标位置
@@ -68,7 +66,7 @@ def scroll_mouse(units, x, y):
         return f"滚动成功: {units}单位，位置: ({x}, {y})"
     except Exception as e:
         return f"滚动失败: {str(e)}"
-@mcp.tool()
+
 def press_key(*keys):
     """
     按下键盘按键
@@ -156,4 +154,13 @@ def safe_int_convert(value, default=0):
 
 
 if __name__ == '__main__':
-    mcp.run()
+    print("鼠标和键盘操作工具")
+    print("可用函数:")
+    print("- click_mouse(x=None, y=None, click_type='left', clicks=1, interval=0.0)")
+    print("- get_position()")
+    print("- move_mouse(x, y, duration=0.0)")
+    print("- scroll_mouse(units, x, y)")
+    print("- press_key(*keys)")
+    print("- key_down(*keys)")
+    print("- key_up(*keys)")
+    print("- type_text(text, interval=0.0)")

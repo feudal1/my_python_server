@@ -58,10 +58,9 @@ class MCPAICallerLangChain:
 
         # 初始化窗口管理器，并传递process_user_input方法
         self.window_manager = WindowManager()
-        # 注意：WindowManager类可能需要修改以支持回调方法
-        # 这里假设WindowManager已经有相应的设置方法
-        if hasattr(self.window_manager, 'set_input_callback'):
-            self.window_manager.set_input_callback(self.process_user_input)
+
+        # 连接用户输入信号到处理函数
+        self.window_manager.input_submitted_signal.connect(self.process_user_input)
 
         # 设置信号连接
         self._setup_connections()
@@ -129,7 +128,7 @@ class MCPAICallerLangChain:
 
         # 创建对话提示模板
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", "你是一个智能AI助手，能够帮助用户完成各种任务。你可以使用工具来获取信息和执行操作。"),
+            ("system", "你是一个智能AI助手，能够帮助用户完成各种任务。你可以使用工具来获取信息和执行操作。当你需要处理SQL编写或法律文档审查时，必须先调用load_skill工具加载对应技能。可用技能：write_sql（SQL工程师）、review_legal_doc（法律顾问）。"),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}")
         ])
@@ -171,6 +170,7 @@ class MCPAICallerLangChain:
             switch_pose_mode, add_vertex_group_transfer, delete_object, open_blender_folder
         )
         from tools.ue_tools import activate_ue_window, import_fbx, build_sifu_mod
+        from tools.skill import load_skill, list_skills
         
         # 将所有工具添加到列表
         self.tools = [
@@ -184,7 +184,9 @@ class MCPAICallerLangChain:
             set_scale, import_psk, scale_to_object_name, set_parent_bone,
             switch_pose_mode, add_vertex_group_transfer, delete_object, open_blender_folder,
             # UE工具
-            activate_ue_window, import_fbx, build_sifu_mod
+            activate_ue_window, import_fbx, build_sifu_mod,
+            # Skill工具
+            load_skill, list_skills
         ]
         print(f"[初始化] 成功创建 {len(self.tools)} 个工具")
 
