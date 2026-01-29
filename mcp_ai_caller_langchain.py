@@ -33,7 +33,7 @@ spec.loader.exec_module(window_manager_module)
 WindowManager = window_manager_module.WindowManager
 
 # 导入LangChain相关模块
-from langchain_community.llms import VLLMOpenAI
+from langchain_community.llms import VLLMOpenAI,ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_classic.memory import ConversationBufferMemory
 from langchain_core.runnables import RunnablePassthrough
@@ -114,13 +114,24 @@ class MCPAICallerLangChain:
         初始化LLM和VLM服务
         """
         print("[初始化] 初始化服务...")
-
+        ZHIPUAI_CONFIG = {
+            "openai_api_key": "d121416576624afca2902462fda1baff.Va2AyE6qDFzYTmZc",
+            "openai_api_base": "https://open.bigmodel.cn/api/paas/v4",
+            "model_name": "glm-4.6v-flash"
+        }
         # 初始化VLLMOpenAI
         self.llm = VLLMOpenAI(
             openai_api_key="EMPTY",
             openai_api_base="http://localhost:8001/v1",
             model_name="/root/my_python_server/wsl/models/OpenBMB_MiniCPM-V-2_6-int4",
             temperature=0.7
+        )
+        self.llm = ChatOpenAI(
+            api_key=ZHIPUAI_CONFIG["openai_api_key"],
+            model_name=ZHIPUAI_CONFIG["model_name"],
+            openai_api_base=ZHIPUAI_CONFIG["openai_api_base"],
+            temperature=0.7,
+            max_tokens=1000
         )
 
         # 初始化对话记忆，限制只保存最近的3轮对话（6条消息）
