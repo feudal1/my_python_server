@@ -9,39 +9,18 @@ from langchain_core.tools import tool
 
 
 # 技能目录路径
-SKILLS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
+SKILLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 @tool
 def load_skill(skill_name: str) -> str:
     """
     根据技能名称加载对应的专家提示（prompt）。
-    支持的技能：write_sql, review_legal_doc, ue_mod制作助手, blender_mod制作助手, 网页_mod制作助手
+    支持的技能：ue_mod制作助手, blender_mod制作助手, 网页_mod制作助手
     """
-    # 内置技能
-    skills = {
-        "write_sql": """
-你是一位专业的 SQL 工程师。请遵守以下规则：
-- 使用 PostgreSQL 语法。
-- 避免 SELECT *，明确列出字段。
-- 为复杂逻辑添加注释。
-- 假设有表：users(id, name, email), orders(id, user_id, amount)
-
-现在，请根据用户需求生成高质量 SQL。
-        """.strip(),
-        
-        "review_legal_doc": """
-你是一位资深法律顾问。请审查用户提供的法律条款，重点关注：
-- 责任限制是否过于宽泛
-- 是否缺少终止条件
-- 是否违反 GDPR/CCPA
-- 条款是否模糊或不可执行
-
-请用正式法律语言回复，并指出具体风险点。
-        """.strip()
-    }
-    
     # 加载目录中的技能
+    skills = {}
+    
     if os.path.exists(SKILLS_DIR):
         for skill_folder in os.listdir(SKILLS_DIR):
             skill_path = os.path.join(SKILLS_DIR, skill_folder)
@@ -72,13 +51,9 @@ def list_skills() -> str:
     """
     列出所有可用的技能
     """
-    # 内置技能
-    skills = {
-        "write_sql": "SQL 工程师 - 生成高质量 SQL 查询",
-        "review_legal_doc": "法律顾问 - 审查法律文档"
-    }
-    
     # 加载目录中的技能
+    skills = {}
+    
     if os.path.exists(SKILLS_DIR):
         for skill_folder in os.listdir(SKILLS_DIR):
             skill_path = os.path.join(SKILLS_DIR, skill_folder)
@@ -120,10 +95,7 @@ if __name__ == "__main__":
     
     # 模拟 list_skills 工具的逻辑
     def test_list_skills():
-        skills = {
-            "write_sql": "SQL 工程师 - 生成高质量 SQL 查询",
-            "review_legal_doc": "法律顾问 - 审查法律文档"
-        }
+        skills = {}
         
         if os.path.exists(SKILLS_DIR):
             for skill_folder in os.listdir(SKILLS_DIR):

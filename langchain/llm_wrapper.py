@@ -5,17 +5,22 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_core.outputs import ChatResult, ChatGeneration
 from typing import List, Optional, Dict, Any
 
-
+openai_api_key="EMPTY",
+openai_api_base="http://localhost:8001/v1"
+model_name="/root/my_python_server/wsl/models/OpenBMB_MiniCPM-V-2_6-int4"
+openai_api_key="d121416576624afca2902462fda1baff.Va2AyE6qDFzYTmZc",
+openai_api_base="https://open.bigmodel.cn/api/paas/v4"
+model_name="glm-4.6v-flash"
 class VLMServiceWrapper(BaseChatModel):
     """使用LangChain的VLLMOpenAI包装器"""
 
     def __init__(self):
         """初始化VLM服务包装器"""
-        # 初始化VLLMOpenAI
+        # 初始化VLLMOpenAI模型
         self.llm = VLLMOpenAI(
-            openai_api_key="EMPTY",
-            openai_api_base="http://localhost:8001/v1",
-            model_name="/root/my_python_server/wsl/models/OpenBMB_MiniCPM-V-2_6-int4",
+            openai_api_key=openai_api_key,
+            openai_api_base=openai_api_base,
+            model_name=model_name,
             temperature=0.7,
             max_tokens=1000
         )

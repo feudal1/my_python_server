@@ -147,7 +147,7 @@ class WindowManager(QMainWindow):
 
         # 创建输入栏
         self.input_line = QLineEdit()
-        self.input_line.setPlaceholderText("输入命令，例如：/h 打开工具窗口")
+        self.input_line.setPlaceholderText("输入命令，例如：列出所有可用的技能")
         self.input_line.setFixedHeight(30)
         self.input_line.setStyleSheet(
             "QLineEdit { background-color: white; color: black; font-size: 14px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; }"
